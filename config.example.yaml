@@ -208,6 +208,20 @@ max-retry-interval: 30
 #       tpm: 400000
 #       max-concurrent: 8
 
+# Outbound proxy pool. A credential that has no proxy of its own (no proxy_url in
+# its auth file, no per-key proxy-url) is assigned one entry automatically. The
+# choice is a stable hash of the credential ID, so each account keeps the same
+# egress IP across reloads and restarts, nothing is written into auth files, and
+# adding or removing an entry only moves the accounts that hashed to it. An explicit
+# proxy_url (including "direct") always wins. "timezone" makes the cloaked clock of a
+# Claude credential follow the proxy's region unless the credential pins its own.
+# Entries may be plain URL strings or mappings.
+# proxy-pool:
+#   - url: "socks5://user:pass@203.0.113.10:443"
+#     timezone: "Asia/Tokyo"
+#     label: "jp-tokyo-1"
+#   - "socks5://user:pass@203.0.113.11:443"
+
 # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).
 # A credential/provider disable-cooling value, when present, overrides this global value.
 disable-cooling: false

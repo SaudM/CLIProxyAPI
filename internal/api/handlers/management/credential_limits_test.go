@@ -291,3 +291,63 @@ func TestPatchAuthFileFields_ClaudeDeviceProfile(t *testing.T) {
 		t.Fatalf("device profile attribute survived clearing")
 	}
 }
+
+func TestProxyPoolEndpointAndProxySource(t *testing.T) {
+	h, manager := newLimitsTestHandler(t)
+	h.cfg.ProxyPool = []config.ProxyPoolEntry{
+		{URL: "socks5://u:secret@10.0.0.1:443", Timezone: "Asia/Tokyo", Label: "jp-1"},
+		{URL: "socks5://u:secret@10.0.0.2:443", Label: "jp-2"},
+	}
+	pooled := &coreauth.Auth{
+		ID: "pooled.json", FileName: "pooled.json", Provider: "claude", ProxyURL: "socks5://u:secret@10.0.0.1:443",
+		Attributes: map[string]string{"path": "/tmp/pooled.json", coreauth.AttributeProxyPool: "true", coreauth.AttributeProxyPoolLabel: "jp-1"},
+		Metadata:   map[string]any{"type": "claude"},
+	}
+	if _, err := manager.Register(context.Background(), pooled); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/proxy-pool", nil)
+	h.GetProxyPool(ctx)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("proxy credentials leaked: %s", rec.Body.String())
+	}
+	var payload struct {
+		Pool []map[string]any `json:"proxy-pool"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Pool) != 2 || payload.Pool[0]["assigned"].(float64) != 1 || payload.Pool[1]["assigned"].(float64) != 0 {
+		t.Fatalf("pool payload = %v", payload.Pool)
+	}
+	if payload.Pool[0]["timezone"] != "Asia/Tokyo" || payload.Pool[0]["label"] != "jp-1" {
+		t.Fatalf("entry[0] = %v", payload.Pool[0])
+	}
+
+	rec = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/auth-files", nil)
+	h.ListAuthFiles(ctx)
+	var files struct {
+		Files []map[string]any `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &files); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	sources := map[string]any{}
+	for _, f := range files.Files {
+		sources[f["name"].(string)] = f["proxy_source"]
+		if f["name"] == "pooled.json" && f["proxy_label"] != "jp-1" {
+			t.Fatalf("proxy_label = %v", f["proxy_label"])
+		}
+	}
+	if sources["pooled.json"] != "pool" || sources["limits.json"] != "none" {
+		t.Fatalf("proxy_source = %v", sources)
+	}
+}

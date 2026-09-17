@@ -143,6 +143,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 				coreauth.ApplyCustomHeadersFromMetadata(auth)
 				applyFingerprintProfileAttribute(auth, metadata)
 			}
+			applyProxyPoolToAll(auths, cfg)
 			return auths, nil
 		}
 	}
@@ -247,6 +248,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 			}
 		}
 	}
+	applyProxyPool(a, cfg)
 	return []*coreauth.Auth{a}, nil
 }
 

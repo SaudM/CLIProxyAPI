@@ -96,6 +96,10 @@ type Config struct {
 	// in-flight request limits. Zero values mean unlimited.
 	CredentialLimits CredentialLimits `yaml:"credential-limits" json:"credential-limits"`
 
+	// ProxyPool lists outbound proxies assigned automatically to credentials that
+	// have no proxy of their own; each entry may carry the region's timezone.
+	ProxyPool []ProxyPoolEntry `yaml:"proxy-pool,omitempty" json:"proxy-pool,omitempty"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 

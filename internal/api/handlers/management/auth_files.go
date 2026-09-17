@@ -481,6 +481,10 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if maxConcurrent, ok := auth.MaxConcurrentOverride(); ok {
 		entry["max_concurrent"] = maxConcurrent
 	}
+	entry["proxy_source"] = authProxySource(auth, h.cfg)
+	if label := strings.TrimSpace(authAttribute(auth, coreauth.AttributeProxyPoolLabel)); label != "" {
+		entry["proxy_label"] = label
+	}
 	if h.authManager != nil {
 		entry["limits"] = credentialLimitStatusPayload(h.authManager.CredentialLimitStatus(auth))
 		if fingerprint := h.describeAuthFingerprint(auth); fingerprint != nil {
@@ -509,6 +513,26 @@ func (h *Handler) describeAuthFingerprint(auth *coreauth.Auth) map[string]any {
 		return nil
 	}
 	return describer.DescribeFingerprint(auth)
+}
+
+// authProxySource reports where a credential's outbound proxy comes from without exposing the URL.
+func authProxySource(auth *coreauth.Auth, cfg *config.Config) string {
+	proxy := ""
+	if auth != nil {
+		proxy = strings.TrimSpace(auth.ProxyURL)
+	}
+	switch {
+	case proxy != "" && (strings.EqualFold(proxy, "direct") || strings.EqualFold(proxy, "none")):
+		return "direct"
+	case proxy != "" && strings.EqualFold(strings.TrimSpace(authAttribute(auth, coreauth.AttributeProxyPool)), "true"):
+		return "pool"
+	case proxy != "":
+		return "credential"
+	case cfg != nil && strings.TrimSpace(cfg.ProxyURL) != "":
+		return "global"
+	default:
+		return "none"
+	}
 }
 
 // credentialLimitStatusPayload renders effective limits and rolling-window usage for one credential.

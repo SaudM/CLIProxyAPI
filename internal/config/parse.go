@@ -62,6 +62,10 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if errValidate := cfg.ValidateClaudeDeviceProfiles(); errValidate != nil {
 		return nil, errValidate
 	}
+	cfg.NormalizeProxyPool()
+	if errValidate := cfg.ValidateProxyPool(); errValidate != nil {
+		return nil, errValidate
+	}
 	if cfg.Discovery.ServiceType == "" {
 		cfg.Discovery.ServiceType = DefaultDiscoveryServiceType
 	}

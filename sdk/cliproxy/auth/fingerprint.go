@@ -15,10 +15,18 @@ func FingerprintProxyInfo(auth *Auth, globalProxy string) map[string]any {
 	if auth != nil {
 		proxy = strings.TrimSpace(auth.ProxyURL)
 	}
+	pooled := auth != nil && auth.Attributes != nil && strings.EqualFold(strings.TrimSpace(auth.Attributes[AttributeProxyPool]), "true")
 	switch {
 	case proxy != "" && (strings.EqualFold(proxy, "direct") || strings.EqualFold(proxy, "none")):
 		info["proxy"] = "direct"
 		info["source"] = "credential"
+	case proxy != "" && pooled:
+		info["proxy"] = proxyutil.Redact(proxy)
+		info["source"] = "pool"
+		info["pool"] = "per-proxy"
+		if label := strings.TrimSpace(auth.Attributes[AttributeProxyPoolLabel]); label != "" {
+			info["label"] = label
+		}
 	case proxy != "":
 		info["proxy"] = proxyutil.Redact(proxy)
 		info["source"] = "credential"
@@ -63,6 +71,13 @@ func MaskIdentifier(value string) string {
 	}
 	return value[:6] + "***"
 }
+
+// Attribute keys describing an automatically assigned pool proxy and the credential timezone.
+const (
+	AttributeProxyPool      = "proxy_pool"
+	AttributeProxyPoolLabel = "proxy_pool_label"
+	AttributeTimezone       = "timezone"
+)
 
 // Attribute keys carrying a per-credential Claude Code device profile override.
 // The synthesizer projects config / auth-file values here; the executor reads

@@ -146,7 +146,11 @@ func deviceProfileDefaultsPayload(cfg *config.Config) gin.H {
 
 // PutCredentialLimits replaces the global per-credential limit defaults.
 func (h *Handler) PutCredentialLimits(c *gin.Context) {
-	var body config.CredentialLimits
+	// Decode onto the current values: fields the body omits keep what is configured
+	// (or the fork default), while an explicit 0 still means unlimited.
+	h.mu.Lock()
+	body := h.cfg.CredentialLimits
+	h.mu.Unlock()
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return

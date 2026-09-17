@@ -107,15 +107,25 @@ func TestCredentialLimitsValidationRejectsNegatives(t *testing.T) {
 	}
 }
 
-func TestCredentialLimitsZeroValueIsUnlimited(t *testing.T) {
+func TestCredentialLimitsAbsentBlockUsesForkDefaultsAndZeroIsUnlimited(t *testing.T) {
 	cfg, errParse := ParseConfigBytes([]byte("request-retry: 1\n"))
 	if errParse != nil {
 		t.Fatalf("ParseConfigBytes() error = %v", errParse)
 	}
-	if r := cfg.CredentialLimits.Resolve("claude"); r.RPM != 0 || r.TPM != 0 || r.MaxConcurrent != 0 {
-		t.Fatalf("default limits = %+v, want all zero", r)
+	if r := cfg.CredentialLimits.Resolve("claude"); r.RPM != 30 || r.TPM != 2_000_000 || r.MaxConcurrent != 4 {
+		t.Fatalf("absent block limits = %+v, want fork defaults", r)
 	}
 	if err := cfg.CredentialLimits.Validate(); err != nil {
+		t.Fatalf("default Validate() = %v", err)
+	}
+	unlimited, errUnlimited := ParseConfigBytes([]byte("credential-limits:\n  rpm: 0\n  tpm: 0\n  max-concurrent: 0\n  rpd: 0\n  tpd: 0\n  max-sessions: 0\n"))
+	if errUnlimited != nil {
+		t.Fatalf("ParseConfigBytes(zeros) error = %v", errUnlimited)
+	}
+	if r := unlimited.CredentialLimits.Resolve("claude"); r.RPM != 0 || r.TPM != 0 || r.MaxConcurrent != 0 || r.RPD != 0 || r.TPD != 0 || r.MaxSessions != 0 {
+		t.Fatalf("explicit zeros = %+v, want all unlimited", r)
+	}
+	if err := (CredentialLimits{}).Validate(); err != nil {
 		t.Fatalf("zero-value Validate() = %v", err)
 	}
 }

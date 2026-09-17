@@ -1,3 +1,20 @@
+# ---------------------------------------------------------------------------
+# Fork defaults (SaudM/CLIProxyAPI). When a key below is ABSENT from your
+# config.yaml the server uses these values, so a fresh deployment behaves like
+# the reference server without any tuning:
+#   request-retry 2, max-retry-interval 30, commercial-mode true,
+#   force-model-prefix true, routing.session-affinity true (ttl 4h),
+#   credential-limits: rpm 30, tpm 2000000, max-concurrent 4, rpd 3000,
+#     tpd 40000000, max-sessions 6, session-window-minutes 15,
+#     active-hours "" (always on), active-hours-jitter-minutes 45,
+#     limit-jitter-percent 15,
+#   claude-header-defaults: stabilize-device-profile true, platform-pool
+#     MacOS/arm64 x6, Windows/x64 x2, Linux/x64 x1, MacOS/x64 x1,
+#   remote-management.panel-github-repository = the fork's panel.
+# Write a key explicitly to override it: 0 = unlimited, [] = no pool, false = off.
+# Proxy lines, credentials, keys and timezones have no default on purpose.
+# ---------------------------------------------------------------------------
+
 # Server host/interface to bind to. Default is empty ("") to bind all interfaces (IPv4 + IPv6).
 # Use "127.0.0.1" or "localhost" to restrict access to local machine only.
 host: ""
@@ -30,7 +47,7 @@ remote-management:
   # disable-auto-update-panel: false
 
   # GitHub repository for the management control panel. Accepts a repository URL or releases API URL.
-  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+  panel-github-repository: "https://github.com/SaudM/Cli-Proxy-API-Management-Center"
 
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"
@@ -128,7 +145,7 @@ plugins:
       mode: "safe" # enum example: safe, fast
 
 # When true, disable high-overhead request logging and HTTP middleware features to reduce per-request memory usage under high concurrency.
-commercial-mode: false
+commercial-mode: true
 
 # When true, write application logs to rotating files instead of stdout
 logging-to-file: false
@@ -154,7 +171,7 @@ redis-usage-queue-retention-seconds: 60
 proxy-url: ""
 
 # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
-force-model-prefix: false
+force-model-prefix: true
 
 # When true, forward filtered upstream response headers to downstream clients.
 # Default is false (disabled).
@@ -170,7 +187,7 @@ passthrough-headers: false
 # Additional rounds apply to HTTP 403, 408, 429, 500, 502, 503, and 504 failures.
 # Individual credential/provider overrides take precedence; 0 disables additional
 # rounds, while an omitted or negative override inherits this global setting.
-request-retry: 3
+request-retry: 2
 
 # Maximum number of different credentials to try in each credential retry round
 # after per-credential round filtering. Set to 0 to try all available
@@ -215,6 +232,7 @@ max-retry-interval: 30
 #   accounts do not share identical caps. The panel shows the effective and base values.
 # A credential over any cap is skipped for the next one; when every candidate is over its
 # caps the request gets HTTP 429 with Retry-After.
+# The values below are the fork defaults and apply when the block is absent.
 # credential-limits:
 #   rpm: 30
 #   tpm: 2000000
@@ -312,7 +330,7 @@ routing:
   # still decides cold bindings, requests without a session, and post-failover rebinding.
   session-affinity: false # default: false
   # How long session-to-auth bindings are retained. Default: 1h
-  session-affinity-ttl: "1h"
+  session-affinity-ttl: "4h"
   # When true (default), subagents (child sessions with parent references) inherit and bind
   # to the parent's upstream credential across all providers (Claude, Codex, Antigravity, Gemini),
   # maximizing Prompt/KV Cache reuse and minimizing TTFT.
@@ -808,7 +826,7 @@ nonstream-keepalive-interval: 0
 #   arch: "arm64"
 #   timeout: "600"
 #   timezone: "Asia/Singapore"  # fallback IANA timezone for cloaked currentDate; a credential JSON "timezone" takes priority
-#   stabilize-device-profile: false  # optional, default false; set true to enable per-auth/API-key fingerprint pinning
+#   stabilize-device-profile: true  # fork default true (pins one device identity per auth/API key); set false to disable
 #   # Optional platform pool: a Claude credential without a device-profile os/arch is assigned one
 #   # entry by a weighted stable hash of its ID, so accounts on one node present a realistic mix of
 #   # machines instead of one identical platform. Only os/arch vary; the software triple stays bound

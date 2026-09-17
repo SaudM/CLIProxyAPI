@@ -446,3 +446,43 @@ func TestMergeExistingAuthMetadataMetaDoesNotRestoreOldKey(t *testing.T) {
 		t.Fatalf("incorrect merged metadata: %#v", auth.Metadata)
 	}
 }
+
+func TestMergeRefreshedAuthKeepsPoolProxyOutOfMetadata(t *testing.T) {
+	const poolProxy = "socks5://pool-user:pool-pass@10.0.0.4:443"
+	pooled := func() *Auth {
+		return &Auth{
+			ID:         "claude-pooled",
+			Provider:   "claude",
+			ProxyURL:   poolProxy,
+			Attributes: map[string]string{AttributeProxyPool: "true", AttributeProxyPoolLabel: "jp-4"},
+			Metadata:   map[string]any{"access_token": "old", "email": "a@b"},
+		}
+	}
+	base, current, updated := pooled(), pooled(), pooled()
+	updated.Metadata["access_token"] = "new"
+	merged := MergeRefreshedAuth(base, current, updated)
+	if _, leaked := merged.Metadata["proxy_url"]; leaked {
+		t.Fatalf("pool proxy leaked into persisted metadata: %v", merged.Metadata["proxy_url"])
+	}
+	if merged.ProxyURL != poolProxy {
+		t.Fatalf("runtime proxy = %q, want the pool assignment kept in memory", merged.ProxyURL)
+	}
+	if merged.Metadata["access_token"] != "new" {
+		t.Fatalf("token not refreshed: %v", merged.Metadata["access_token"])
+	}
+
+	// An explicit proxy the user wrote into metadata still wins and is persisted.
+	current = pooled()
+	current.Metadata["proxy_url"] = "socks5://own@1.2.3.4:1080"
+	merged = MergeRefreshedAuth(base, current, updated)
+	if merged.Metadata["proxy_url"] != "socks5://own@1.2.3.4:1080" || merged.ProxyURL != "socks5://own@1.2.3.4:1080" {
+		t.Fatalf("explicit proxy lost: meta=%v struct=%q", merged.Metadata["proxy_url"], merged.ProxyURL)
+	}
+
+	// A credential without pool attributes keeps the legacy behaviour: its struct proxy is persisted.
+	plain := &Auth{ID: "plain", ProxyURL: "socks5://own@1.2.3.4:1080", Metadata: map[string]any{"access_token": "x"}}
+	merged = MergeRefreshedAuth(plain.Clone(), plain.Clone(), plain.Clone())
+	if merged.Metadata["proxy_url"] != "socks5://own@1.2.3.4:1080" {
+		t.Fatalf("explicit struct proxy not persisted: %v", merged.Metadata["proxy_url"])
+	}
+}

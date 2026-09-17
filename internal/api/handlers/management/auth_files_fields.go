@@ -655,6 +655,12 @@ func syncAuthFileMetadataFields(auth *coreauth.Auth, touchedRoots map[string]str
 		}
 	}
 	if _, ok := touchedRoots["proxy_url"]; ok {
+		// An explicit proxy replaces a proxy-pool assignment; drop the pool marks so
+		// the persisted state and the identity line stop describing the pool line.
+		if auth.Attributes != nil {
+			delete(auth.Attributes, coreauth.AttributeProxyPool)
+			delete(auth.Attributes, coreauth.AttributeProxyPoolLabel)
+		}
 		if proxyURL, okString := auth.Metadata["proxy_url"].(string); okString {
 			auth.ProxyURL = strings.TrimSpace(proxyURL)
 		}

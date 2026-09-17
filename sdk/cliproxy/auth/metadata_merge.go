@@ -247,12 +247,12 @@ func mergeAuthContent(base, current, updated *Auth) *Auth {
 	}
 
 	// 3. ProxyURL three-way merge (supporting both struct field and metadata modifications)
-	baseStruct := ""
-	if base != nil {
-		baseStruct = strings.TrimSpace(base.ProxyURL)
-	}
-	currentStruct := strings.TrimSpace(current.ProxyURL)
-	updatedStruct := strings.TrimSpace(updated.ProxyURL)
+	// A proxy assigned from the proxy-pool lives only in memory. It must never be
+	// written into the credential's metadata: that would bake the assignment (and
+	// the pool password) into the auth file and override the pool for good.
+	baseStruct := explicitProxyURL(base)
+	currentStruct := explicitProxyURL(current)
+	updatedStruct := explicitProxyURL(updated)
 
 	baseMetaProxy := ""
 	if base != nil && base.Metadata != nil {
@@ -311,7 +311,8 @@ func mergeAuthContent(base, current, updated *Auth) *Auth {
 		merged.ProxyURL = finalProxy
 		merged.Metadata["proxy_url"] = finalProxy
 	} else {
-		merged.ProxyURL = ""
+		// No explicit proxy: keep the runtime pool assignment, persist nothing.
+		merged.ProxyURL = poolAssignedProxyURL(current)
 		delete(merged.Metadata, "proxy_url")
 	}
 
@@ -363,4 +364,25 @@ func mergeAuthContent(base, current, updated *Auth) *Auth {
 	}
 
 	return merged
+}
+
+// isProxyPoolAssigned reports whether the auth's ProxyURL came from the proxy-pool.
+func isProxyPoolAssigned(a *Auth) bool {
+	return a != nil && a.Attributes != nil && strings.EqualFold(strings.TrimSpace(a.Attributes[AttributeProxyPool]), "true")
+}
+
+// explicitProxyURL returns the credential's own proxy, ignoring a pool assignment.
+func explicitProxyURL(a *Auth) string {
+	if a == nil || isProxyPoolAssigned(a) {
+		return ""
+	}
+	return strings.TrimSpace(a.ProxyURL)
+}
+
+// poolAssignedProxyURL returns the pool-assigned proxy, or "" when the auth has none.
+func poolAssignedProxyURL(a *Auth) string {
+	if !isProxyPoolAssigned(a) {
+		return ""
+	}
+	return strings.TrimSpace(a.ProxyURL)
 }

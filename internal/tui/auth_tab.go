@@ -21,6 +21,24 @@ var authEditableFields = []editableField{
 	{label: "Prefix", key: "prefix"},
 	{label: "Proxy URL", key: "proxy_url"},
 	{label: "Priority", key: "priority"},
+	{label: "RPM", key: "rpm"},
+	{label: "TPM", key: "tpm"},
+	{label: "Max Concurrent", key: "max_concurrent"},
+}
+
+// authIntEditableFields are sent as integers; an empty value clears the override (null).
+var authIntEditableFields = map[string]bool{
+	"priority":       true,
+	"rpm":            true,
+	"tpm":            true,
+	"max_concurrent": true,
+}
+
+// authClearableFields accept an empty input as "remove the override".
+var authClearableFields = map[string]bool{
+	"rpm":            true,
+	"tpm":            true,
+	"max_concurrent": true,
 }
 
 // authTabModel displays auth credential files with interactive management.
@@ -280,7 +298,13 @@ func (m authTabModel) renderDetail(f map[string]any) string {
 		{"Prefix", "prefix", true},
 		{"Proxy URL", "proxy_url", true},
 		{"Priority", "priority", true},
+		{"RPM", "rpm", true},
+		{"TPM", "tpm", true},
+		{"Max Concurrent", "max_concurrent", true},
 		{"Project ID", "project_id", false},
+		{T("auth_fingerprint_mode"), "fingerprint.identity_mode", false},
+		{T("auth_fingerprint_ua"), "fingerprint.user_agent", false},
+		{T("auth_fingerprint_proxy"), "fingerprint.transport.proxy", false},
 		{"Disabled", "disabled", false},
 		{"Created", "created_at", false},
 		{"Updated", "updated_at", false},
@@ -311,13 +335,28 @@ func (m authTabModel) renderDetail(f map[string]any) string {
 	return sb.String()
 }
 
-// getAnyString converts any value to its string representation.
+// getAnyString converts any value to its string representation. Dotted keys
+// walk nested maps (e.g. "fingerprint.user_agent").
 func getAnyString(m map[string]any, key string) string {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return ""
+	if !strings.Contains(key, ".") {
+		v, ok := m[key]
+		if !ok || v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
 	}
-	return fmt.Sprintf("%v", v)
+	var current any = m
+	for _, part := range strings.Split(key, ".") {
+		next, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = next[part]
+		if !ok || current == nil {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%v", current)
 }
 
 func max(a, b int) int {
@@ -336,7 +375,9 @@ func (m authTabModel) handleEditInput(msg tea.KeyMsg) (authTabModel, tea.Cmd) {
 		m.editing = false
 		m.editInput.Blur()
 		fields := map[string]any{}
-		if fieldKey == "priority" {
+		if authClearableFields[fieldKey] && strings.TrimSpace(value) == "" {
+			fields[fieldKey] = nil
+		} else if authIntEditableFields[fieldKey] {
 			p, err := strconv.Atoi(value)
 			if err != nil {
 				return m, func() tea.Msg {
@@ -445,6 +486,12 @@ func (m authTabModel) handleNormalInput(msg tea.KeyMsg) (authTabModel, tea.Cmd) 
 		return m, m.startEdit(1) // proxy_url
 	case "3":
 		return m, m.startEdit(2) // priority
+	case "4":
+		return m, m.startEdit(3) // rpm
+	case "5":
+		return m, m.startEdit(4) // tpm
+	case "6":
+		return m, m.startEdit(5) // max_concurrent
 	case "r":
 		m.status = ""
 		return m, m.fetchFiles

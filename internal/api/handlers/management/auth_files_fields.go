@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
@@ -291,13 +292,17 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": errNormalize.Error()})
 		return
 	}
-	requestRetryPatch, errRequestRetry := decodeAuthFileRequestRetryPatch(req)
-	if errRequestRetry != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": errRequestRetry.Error()})
-		return
+	intPatches := make(map[string]authFileIntPatch, len(authFileIntPatchKeys))
+	for _, key := range authFileIntPatchKeys {
+		patch, errPatch := decodeAuthFileIntPatch(req, key, key == "request_retry")
+		if errPatch != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errPatch.Error()})
+			return
+		}
+		intPatches[key] = patch
 	}
 	for key := range req {
-		if strings.TrimSpace(key) == "request_retry" {
+		if _, handled := intPatches[strings.TrimSpace(key)]; handled {
 			delete(req, key)
 		}
 	}
@@ -374,16 +379,16 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		}
 		changed = true
 	}
-	if requestRetryPatch.Set {
-		if targetAuth.Metadata == nil {
-			targetAuth.Metadata = make(map[string]any)
+	for _, key := range authFileIntPatchKeys {
+		if applyAuthFileIntPatch(targetAuth, key, intPatches[key]) {
+			changed = true
 		}
-		if requestRetryPatch.Value == nil {
-			delete(targetAuth.Metadata, "request_retry")
-		} else {
-			targetAuth.Metadata["request_retry"] = *requestRetryPatch.Value
+	}
+	if _, touched := touchedRoots["device_profile"]; touched {
+		if errProfile := syncAuthFileClaudeDeviceProfile(targetAuth); errProfile != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errProfile.Error()})
+			return
 		}
-		changed = true
 	}
 	if changed {
 		syncAuthFileMetadataFields(targetAuth, touchedRoots)
@@ -425,9 +430,28 @@ func decodeAuthFileFieldValue(raw json.RawMessage) (any, error) {
 	return value, nil
 }
 
-type authFileRequestRetryPatch struct {
+// authFileIntPatchKeys are the integer metadata fields decoded out-of-band by PatchAuthFileFields.
+var authFileIntPatchKeys = []string{"request_retry", "rpm", "tpm", "max_concurrent"}
+
+type authFileIntPatch struct {
 	Set   bool
 	Value *int
+}
+
+// applyAuthFileIntPatch writes or deletes an integer metadata field and reports whether it changed anything.
+func applyAuthFileIntPatch(auth *coreauth.Auth, key string, patch authFileIntPatch) bool {
+	if auth == nil || !patch.Set {
+		return false
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	if patch.Value == nil {
+		delete(auth.Metadata, key)
+	} else {
+		auth.Metadata[key] = *patch.Value
+	}
+	return true
 }
 
 func normalizeAuthFilePatchFields(fields map[string]json.RawMessage) (map[string]json.RawMessage, error) {
@@ -461,46 +485,55 @@ func normalizeAuthFilePatchFields(fields map[string]json.RawMessage) (map[string
 	return normalized, nil
 }
 
-func decodeAuthFileRequestRetryPatch(fields map[string]json.RawMessage) (authFileRequestRetryPatch, error) {
+// decodeAuthFileIntPatch extracts an integer-or-null field. When negativeClears is true a
+// negative value deletes the override (legacy request_retry semantics); otherwise it is rejected.
+func decodeAuthFileIntPatch(fields map[string]json.RawMessage, key string, negativeClears bool) (authFileIntPatch, error) {
 	var raw json.RawMessage
 	found := false
-	for key, value := range fields {
-		fieldPath := strings.TrimSpace(key)
+	for fieldKey, value := range fields {
+		fieldPath := strings.TrimSpace(fieldKey)
 		fieldRoot := rootAuthFileField(fieldPath)
-		if fieldRoot == "request_retry" && fieldPath != fieldRoot {
-			return authFileRequestRetryPatch{}, fmt.Errorf("request_retry does not support nested fields")
+		if fieldRoot == key && fieldPath != fieldRoot {
+			return authFileIntPatch{}, fmt.Errorf("%s does not support nested fields", key)
 		}
-		if fieldPath == "request_retry" {
+		if fieldPath == key {
 			found = true
 			raw = value
 		}
 	}
 	if !found {
-		return authFileRequestRetryPatch{}, nil
+		return authFileIntPatch{}, nil
+	}
+	errInvalid := fmt.Errorf("%s must be an integer or null", key)
+	if !negativeClears {
+		errInvalid = fmt.Errorf("%s must be a non-negative integer or null", key)
 	}
 	value, errDecode := decodeAuthFileFieldValue(raw)
 	if errDecode != nil {
-		return authFileRequestRetryPatch{}, fmt.Errorf("request_retry must be an integer or null")
+		return authFileIntPatch{}, errInvalid
 	}
 	if value == nil {
-		return authFileRequestRetryPatch{Set: true}, nil
+		return authFileIntPatch{Set: true}, nil
 	}
 	number, okNumber := value.(json.Number)
 	if !okNumber {
-		return authFileRequestRetryPatch{}, fmt.Errorf("request_retry must be an integer or null")
+		return authFileIntPatch{}, errInvalid
 	}
 	parsed, errInt := number.Int64()
 	if errInt != nil {
-		return authFileRequestRetryPatch{}, fmt.Errorf("request_retry must be an integer or null")
+		return authFileIntPatch{}, errInvalid
 	}
 	normalized := int(parsed)
 	if int64(normalized) != parsed {
-		return authFileRequestRetryPatch{}, fmt.Errorf("request_retry must be an integer or null")
+		return authFileIntPatch{}, errInvalid
 	}
 	if normalized < 0 {
-		return authFileRequestRetryPatch{Set: true}, nil
+		if negativeClears {
+			return authFileIntPatch{Set: true}, nil
+		}
+		return authFileIntPatch{}, errInvalid
 	}
-	return authFileRequestRetryPatch{Set: true, Value: &normalized}, nil
+	return authFileIntPatch{Set: true, Value: &normalized}, nil
 }
 
 func rootAuthFileField(path string) string {
@@ -666,6 +699,49 @@ func syncAuthFilePlanTypeAttribute(auth *coreauth.Auth) {
 	} else {
 		delete(auth.Attributes, "plan_type")
 	}
+}
+
+// syncAuthFileClaudeDeviceProfile validates the patched device_profile object and
+// re-projects it into the attributes the Claude executor reads. A typo is rejected
+// with 400 rather than silently inheriting the global baseline at request time.
+func syncAuthFileClaudeDeviceProfile(auth *coreauth.Auth) error {
+	if auth == nil {
+		return nil
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	for _, key := range []string{
+		coreauth.AttributeClaudeDeviceUserAgent, coreauth.AttributeClaudeDevicePackageVersion,
+		coreauth.AttributeClaudeDeviceRuntimeVersion, coreauth.AttributeClaudeDeviceOS, coreauth.AttributeClaudeDeviceArch,
+	} {
+		delete(auth.Attributes, key)
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+		return nil
+	}
+	profile, errDecode := config.ClaudeDeviceProfileValuesFromMetadata(auth.Metadata)
+	if errDecode != nil {
+		return errDecode
+	}
+	if profile.IsZero() {
+		return nil
+	}
+	if errValidate := profile.Validate(); errValidate != nil {
+		return fmt.Errorf("device_profile: %w", errValidate)
+	}
+	profile = profile.Trimmed()
+	set := func(key, value string) {
+		if value != "" {
+			auth.Attributes[key] = value
+		}
+	}
+	set(coreauth.AttributeClaudeDeviceUserAgent, profile.UserAgent)
+	set(coreauth.AttributeClaudeDevicePackageVersion, profile.PackageVersion)
+	set(coreauth.AttributeClaudeDeviceRuntimeVersion, profile.RuntimeVersion)
+	set(coreauth.AttributeClaudeDeviceOS, profile.OS)
+	set(coreauth.AttributeClaudeDeviceArch, profile.Arch)
+	return nil
 }
 
 func syncAuthFileHeaderAttributes(auth *coreauth.Auth) {

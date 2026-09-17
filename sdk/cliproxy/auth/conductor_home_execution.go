@@ -77,7 +77,10 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 	var lastErr error
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming
+	var limitTracker credentialLimitTracker
+	defer limitTracker.release()
 	for homeAuthCount := 1; ; homeAuthCount++ {
+		limitTracker.release()
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, markHomeRetryRoundExhausted(preferredExecutionAttemptError(lastErr, upstreamErr), roundTiming.RetryAfter(), true)
@@ -89,6 +92,9 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 		pickOpts = withHomeExcludedAuthIDs(pickOpts, tried)
 		selection, errSelection := m.pickHomeDispatchSelection(ctx, routeModel, pickOpts)
 		if errSelection != nil {
+			if errLimit := limitTracker.pickFailureError(m, lastErr, errSelection); errLimit != nil {
+				return cliproxyexecutor.Response{}, errLimit
+			}
 			preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
 			var homeCooldown *homeDispatchRetryAfterError
 			if lastErr != nil && errors.As(errSelection, &homeCooldown) && homeCooldown != nil {
@@ -116,6 +122,19 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			return cliproxyexecutor.Response{}, repeatedHomeAuthError()
 		}
 		tried[auth.ID] = struct{}{}
+		// Local rpm/tpm/max_concurrent admission is an extra cap on top of Home's policy.
+		// Token counting is exempt. A refused credential does not count as an attempt.
+		if !countTokens {
+			lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+			if !okLease {
+				limitTracker.noteRefusal(blockedUntil)
+				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "local_credential_limit"); errEnd != nil {
+					return cliproxyexecutor.Response{}, errEnd
+				}
+				continue
+			}
+			limitTracker.hold(lease)
+		}
 		attempted[auth.ID] = struct{}{}
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, selection.Provider, routeModel)

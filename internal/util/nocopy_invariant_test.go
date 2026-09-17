@@ -111,6 +111,7 @@ var reviewedInPlaceByteWrites = map[string]reviewedInPlaceByteWrite{
 	"internal/client/codex/live/tcp_proxy.go":               {1, "copies header and payload into a freshly allocated frame"},
 	"internal/home/client.go":                               {1, "zeroes a secret buffer after json.Unmarshal has copied every value out"},
 	"internal/pluginstore/auth.go":                          {1, "zeroes a locally built credential buffer after base64 encoding copied it out"},
+	"sdk/cliproxy/auth/credential_limiter.go":               {1, "resets a slot in a fixed-size int64 rate-limit ring; the array never holds JSON bytes"},
 }
 
 // TestInPlaceByteWritesAreReviewed keeps the set of in-place byte writes small

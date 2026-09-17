@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -466,12 +467,18 @@ func claudeJSONObjectHasKeys(raw []byte, want []string) bool {
 }
 
 func plausibleClaudeCodeUserAgent(userAgent string, cfg *config.Config) bool {
+	return plausibleClaudeCodeUserAgentForCredential(userAgent, cfg, nil)
+}
+
+// plausibleClaudeCodeUserAgentForCredential checks a native User-Agent against the
+// baseline version of the credential that will carry the request.
+func plausibleClaudeCodeUserAgentForCredential(userAgent string, cfg *config.Config, auth *cliproxyauth.Auth) bool {
 	userAgent = strings.TrimSpace(userAgent)
 	if !claudeCodeUserAgentPattern.MatchString(userAgent) || !claudeCodeNativeUserAgentPattern.MatchString(userAgent) {
 		return false
 	}
 	candidate, okCandidate := parseClaudeCLIVersion(userAgent)
-	baseline, okBaseline := parseClaudeCLIVersion(defaultClaudeDeviceProfile(cfg).UserAgent)
+	baseline, okBaseline := parseClaudeCLIVersion(credentialClaudeDeviceProfile(cfg, auth).UserAgent)
 	return okCandidate && okBaseline && plausibleClaudeCLIVersion(candidate, baseline)
 }
 

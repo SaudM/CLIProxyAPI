@@ -472,7 +472,63 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request_retry"] = requestRetry
 	}
+	if rpm, ok := auth.RPMOverride(); ok {
+		entry["rpm"] = rpm
+	}
+	if tpm, ok := auth.TPMOverride(); ok {
+		entry["tpm"] = tpm
+	}
+	if maxConcurrent, ok := auth.MaxConcurrentOverride(); ok {
+		entry["max_concurrent"] = maxConcurrent
+	}
+	if h.authManager != nil {
+		entry["limits"] = credentialLimitStatusPayload(h.authManager.CredentialLimitStatus(auth))
+		if fingerprint := h.describeAuthFingerprint(auth); fingerprint != nil {
+			entry["fingerprint"] = fingerprint
+		}
+	}
 	return entry
+}
+
+// describeAuthFingerprint asks the auth's executor for the upstream identity it presents.
+// Executors that do not implement FingerprintDescriber contribute nothing.
+func (h *Handler) describeAuthFingerprint(auth *coreauth.Auth) map[string]any {
+	if h == nil || h.authManager == nil || auth == nil {
+		return nil
+	}
+	provider := strings.TrimSpace(auth.Provider)
+	if provider == "" {
+		return nil
+	}
+	executor, ok := h.authManager.Executor(provider)
+	if !ok || executor == nil {
+		return nil
+	}
+	describer, ok := executor.(coreauth.FingerprintDescriber)
+	if !ok {
+		return nil
+	}
+	return describer.DescribeFingerprint(auth)
+}
+
+// credentialLimitStatusPayload renders effective limits and rolling-window usage for one credential.
+func credentialLimitStatusPayload(status coreauth.CredentialLimitStatus) gin.H {
+	return gin.H{
+		"rpm": gin.H{
+			"limit":             status.RPM,
+			"used":              status.RPMUsed,
+			"resets_in_seconds": int64(status.RPMResetsIn.Seconds()),
+		},
+		"tpm": gin.H{
+			"limit":             status.TPM,
+			"used":              status.TPMUsed,
+			"resets_in_seconds": int64(status.TPMResetsIn.Seconds()),
+		},
+		"max_concurrent": gin.H{
+			"limit":     status.MaxConcurrent,
+			"in_flight": status.InFlight,
+		},
+	}
 }
 
 func authFileRequestRetryFromJSON(data []byte) (int, bool) {

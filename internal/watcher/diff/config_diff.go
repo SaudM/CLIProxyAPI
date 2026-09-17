@@ -82,6 +82,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.MaxRetryInterval != newCfg.MaxRetryInterval {
 		changes = append(changes, fmt.Sprintf("max-retry-interval: %d -> %d", oldCfg.MaxRetryInterval, newCfg.MaxRetryInterval))
 	}
+	changes = appendCredentialLimitsChange(changes, oldCfg.CredentialLimits, newCfg.CredentialLimits)
 	if oldCfg.ProxyURL != newCfg.ProxyURL {
 		changes = append(changes, fmt.Sprintf("proxy-url: %s -> %s", formatProxyURL(oldCfg.ProxyURL), formatProxyURL(newCfg.ProxyURL)))
 	}
@@ -228,6 +229,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 				changes = append(changes, fmt.Sprintf("gemini[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
 			}
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("gemini[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("gemini[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 		}
 	}
 	if len(oldCfg.InteractionsKey) != len(newCfg.InteractionsKey) {
@@ -263,6 +265,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 				changes = append(changes, fmt.Sprintf("interactions[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
 			}
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("interactions[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("interactions[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 		}
 	}
 
@@ -306,6 +309,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 				changes = append(changes, fmt.Sprintf("claude[%d].fingerprint-profile: %s -> %s", i, strings.TrimSpace(o.FingerprintProfile), strings.TrimSpace(n.FingerprintProfile)))
 			}
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("claude[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("claude[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 			if o.Cloak != nil && n.Cloak != nil {
 				if strings.TrimSpace(o.Cloak.Mode) != strings.TrimSpace(n.Cloak.Mode) {
 					changes = append(changes, fmt.Sprintf("claude[%d].cloak.mode: %s -> %s", i, o.Cloak.Mode, n.Cloak.Mode))
@@ -360,6 +364,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 				changes = append(changes, fmt.Sprintf("codex[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
 			}
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("codex[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("codex[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 		}
 	}
 
@@ -387,6 +392,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			}
 			changes = appendOptionalBoolChange(changes, fmt.Sprintf("xai[%d].disable-cooling", i), o.DisableCooling, n.DisableCooling)
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("xai[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("xai[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {
 				changes = append(changes, fmt.Sprintf("xai[%d].api-key: updated", i))
 			}
@@ -427,6 +433,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			}
 			changes = appendOptionalBoolChange(changes, fmt.Sprintf("meta[%d].disable-cooling", i), o.DisableCooling, n.DisableCooling)
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("meta[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("meta[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {
 				changes = append(changes, fmt.Sprintf("meta[%d].api-key: updated", i))
 			}
@@ -524,6 +531,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 				changes = append(changes, fmt.Sprintf("vertex[%d].headers: updated", i))
 			}
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("vertex[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
+			changes = appendCredentialLimitValuesChange(changes, fmt.Sprintf("vertex[%d]", i), o.CredentialLimitValues, n.CredentialLimitValues)
 		}
 	}
 
@@ -659,4 +667,26 @@ func formatURL(raw string) string {
 		return host
 	}
 	return scheme + "://" + host
+}
+
+func appendCredentialLimitsChange(changes []string, oldLimits, newLimits config.CredentialLimits) []string {
+	if oldLimits.RPM != newLimits.RPM {
+		changes = append(changes, fmt.Sprintf("credential-limits.rpm: %d -> %d", oldLimits.RPM, newLimits.RPM))
+	}
+	if oldLimits.TPM != newLimits.TPM {
+		changes = append(changes, fmt.Sprintf("credential-limits.tpm: %d -> %d", oldLimits.TPM, newLimits.TPM))
+	}
+	if oldLimits.MaxConcurrent != newLimits.MaxConcurrent {
+		changes = append(changes, fmt.Sprintf("credential-limits.max-concurrent: %d -> %d", oldLimits.MaxConcurrent, newLimits.MaxConcurrent))
+	}
+	if !reflect.DeepEqual(oldLimits.Providers, newLimits.Providers) {
+		changes = append(changes, "credential-limits.providers updated")
+	}
+	return changes
+}
+
+func appendCredentialLimitValuesChange(changes []string, prefix string, oldVals, newVals config.CredentialLimitValues) []string {
+	changes = appendOptionalIntChange(changes, prefix+".rpm", oldVals.RPM, newVals.RPM)
+	changes = appendOptionalIntChange(changes, prefix+".tpm", oldVals.TPM, newVals.TPM)
+	return appendOptionalIntChange(changes, prefix+".max-concurrent", oldVals.MaxConcurrent, newVals.MaxConcurrent)
 }

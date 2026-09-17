@@ -232,6 +232,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	coreauth.SetOAuthModelAliasesAttribute(a, perAccountModelAliases)
 	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
 	applyFingerprintProfileAttribute(a, metadata)
+	if errProfile := applyClaudeDeviceProfileFromMetadata(a, metadata); errProfile != nil {
+		return nil, fmt.Errorf("invalid device_profile in %s: %w", filepath.Base(fullPath), errProfile)
+	}
 	// For codex auth files, extract plan_type from metadata or JWT id_token.
 	if provider == "codex" {
 		if ptRaw, ok := metadata["plan_type"].(string); ok && strings.TrimSpace(ptRaw) != "" {

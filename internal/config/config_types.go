@@ -497,12 +497,20 @@ type ClaudeKey struct {
 	// RequestRetry optionally overrides the global request-retry for this credential.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+	// CredentialLimitValues optionally overrides the global credential-limits for this entry.
+	// Nil fields inherit the global value; 0 disables the limit; negative values are rejected.
+	CredentialLimitValues `yaml:",inline"`
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
+
+	// DeviceProfile overrides the Claude Code software/platform tuple presented for
+	// this credential. Empty fields inherit claude-header-defaults; the software
+	// triple must match a measured release (see ClaudeDeviceProfileValues.Validate).
+	DeviceProfile ClaudeDeviceProfileValues `yaml:"device-profile,omitempty" json:"device-profile,omitempty"`
 
 	// FingerprintProfile selects the Claude Code request fingerprint for this
 	// credential on Anthropic Messages. Empty/default keeps the caller request
@@ -615,6 +623,9 @@ type CodexKey struct {
 	// RequestRetry optionally overrides the global request-retry for this credential.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+	// CredentialLimitValues optionally overrides the global credential-limits for this entry.
+	// Nil fields inherit the global value; 0 disables the limit; negative values are rejected.
+	CredentialLimitValues `yaml:",inline"`
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
@@ -718,6 +729,9 @@ type GeminiKey struct {
 	// RequestRetry optionally overrides the global request-retry for this credential.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+	// CredentialLimitValues optionally overrides the global credential-limits for this entry.
+	// Nil fields inherit the global value; 0 disables the limit; negative values are rejected.
+	CredentialLimitValues `yaml:",inline"`
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
@@ -805,6 +819,9 @@ type OpenAICompatibility struct {
 	// RequestRetry optionally overrides the global request-retry for this provider.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+	// CredentialLimitValues optionally overrides the global credential-limits for this entry.
+	// Nil fields inherit the global value; 0 disables the limit; negative values are rejected.
+	CredentialLimitValues `yaml:",inline"`
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`

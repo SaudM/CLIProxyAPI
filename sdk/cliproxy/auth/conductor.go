@@ -30,6 +30,13 @@ type ProviderExecutor interface {
 	HttpRequest(ctx context.Context, auth *Auth, req *http.Request) (*http.Response, error)
 }
 
+// FingerprintDescriber is an optional executor capability that reports the upstream
+// identity (User-Agent, client headers, device profile, transport) the executor would
+// present for a credential. It is read-only and consumed by the management API.
+type FingerprintDescriber interface {
+	DescribeFingerprint(auth *Auth) map[string]any
+}
+
 // RequestAuthPreparer lets an executor update missing auth metadata immediately
 // before a request. Manager serializes and persists returned updates.
 type RequestAuthPreparer interface {
@@ -164,6 +171,10 @@ type Manager struct {
 	maxRetryCredentials atomic.Int32
 	maxRetryInterval    atomic.Int64
 
+	// limiter enforces per-credential rpm/tpm/max_concurrent; credentialLimits holds the global defaults.
+	limiter          *credentialLimiter
+	credentialLimits atomic.Pointer[internalconfig.CredentialLimits]
+
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value
 
@@ -212,6 +223,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		homeSessionSelections: make(map[string]map[homeSessionSelectionKey]*HomeDispatchSelection),
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
+		limiter:               newCredentialLimiter(),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})

@@ -147,16 +147,37 @@ func TestClaudeOAuthTLSResumptionIsWireSafe(t *testing.T) {
 
 func TestClaudeOAuthSessionCacheBoundsProxyCardinality(t *testing.T) {
 	firstProxy := "http://127.0.0.1:31000"
-	first := claudeOAuthSessionCache(firstProxy)
+	first := claudeOAuthSessionCache(firstProxy, "")
 	for index := 1; index <= claudeOAuthProxySessionCacheCapacity; index++ {
-		claudeOAuthSessionCache("http://127.0.0.1:" + strconv.Itoa(31000+index))
+		claudeOAuthSessionCache("http://127.0.0.1:"+strconv.Itoa(31000+index), "")
 	}
 	if got := claudeOAuthSessionCaches.Len(); got > claudeOAuthProxySessionCacheCapacity {
 		t.Fatalf("OAuth session caches = %d, want at most %d", got, claudeOAuthProxySessionCacheCapacity)
 	}
-	if recreated := claudeOAuthSessionCache(firstProxy); recreated == first {
+	if recreated := claudeOAuthSessionCache(firstProxy, ""); recreated == first {
 		t.Fatal("least recently used OAuth proxy session cache was not evicted")
 	}
+}
+
+func TestClaudeOAuthSessionCacheIsolatesCredentials(t *testing.T) {
+	const proxyURL = "http://127.0.0.1:31999"
+	a := cacheOfClaudeAuth(t, NewClaudeAuthForCredential(nil, proxyURL, "auth-a"))
+	b := cacheOfClaudeAuth(t, NewClaudeAuthForCredential(nil, proxyURL, "auth-b"))
+	if a == b {
+		t.Fatal("two credentials share an OAuth TLS session cache, so a refresh for one could resume the other's session")
+	}
+	if again := cacheOfClaudeAuth(t, NewClaudeAuthForCredential(nil, proxyURL, "auth-a")); again != a {
+		t.Fatal("the same credential must keep resuming its own sessions across ClaudeAuth instances")
+	}
+}
+
+func cacheOfClaudeAuth(t *testing.T, service *ClaudeAuth) tls.ClientSessionCache {
+	t.Helper()
+	transport, ok := service.httpClient.Transport.(*utlsRoundTripper)
+	if !ok {
+		t.Fatalf("ClaudeAuth transport type = %T, want *utlsRoundTripper", service.httpClient.Transport)
+	}
+	return transport.sessionCache
 }
 
 func TestClaudeOAuthRequestHeaderOrderMatchesNative220Capture(t *testing.T) {

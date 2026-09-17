@@ -100,6 +100,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeyEntries(ctx *SynthesisContext, en
 			metadata["disable_cooling"] = *entry.DisableCooling
 		}
 		addRequestRetryToMetadata(entry.RequestRetry, metadata)
+		addCredentialLimitsToMetadata(entry.CredentialLimitValues, metadata)
 		addRequestScopedErrorsToMetadata(entry.RequestScopedErrors, metadata)
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
@@ -162,6 +163,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 			metadata["disable_cooling"] = *ck.DisableCooling
 		}
 		addRequestRetryToMetadata(ck.RequestRetry, metadata)
+		addCredentialLimitsToMetadata(ck.CredentialLimitValues, metadata)
 		addRequestScopedErrorsToMetadata(ck.RequestScopedErrors, metadata)
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
@@ -176,6 +178,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if profile := strings.ToLower(strings.TrimSpace(ck.FingerprintProfile)); profile != "" {
 			attrs["fingerprint_profile"] = profile
 		}
+		addClaudeDeviceProfileToAttrs(ck.DeviceProfile, attrs)
 		if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
 			attrs["models_hash"] = hash
 		}
@@ -244,6 +247,7 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 			metadata["disable_cooling"] = *entry.DisableCooling
 		}
 		addRequestRetryToMetadata(entry.RequestRetry, metadata)
+		addCredentialLimitsToMetadata(entry.CredentialLimitValues, metadata)
 		addRequestScopedErrorsToMetadata(entry.RequestScopedErrors, metadata)
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
@@ -324,6 +328,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				metadata["disable_cooling"] = *disableCooling
 			}
 			addRequestRetryToMetadata(compat.RequestRetry, metadata)
+			addCredentialLimitsToMetadata(compat.CredentialLimitValues, metadata)
 			addRequestScopedErrorsToMetadata(compat.RequestScopedErrors, metadata)
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
@@ -370,6 +375,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				metadata["disable_cooling"] = *disableCooling
 			}
 			addRequestRetryToMetadata(compat.RequestRetry, metadata)
+			addCredentialLimitsToMetadata(compat.CredentialLimitValues, metadata)
 			addRequestScopedErrorsToMetadata(compat.RequestScopedErrors, metadata)
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
@@ -437,6 +443,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			metadata["disable_cooling"] = *compat.DisableCooling
 		}
 		addRequestRetryToMetadata(compat.RequestRetry, metadata)
+		addCredentialLimitsToMetadata(compat.CredentialLimitValues, metadata)
 		a := &coreauth.Auth{
 			ID:         id,
 			Provider:   providerName,

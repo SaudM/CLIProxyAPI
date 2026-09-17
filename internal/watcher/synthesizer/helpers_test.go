@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/diff"
@@ -318,4 +319,84 @@ func TestAddRequestRetryToMetadata(t *testing.T) {
 	}
 
 	addRequestRetryToMetadata(&positive, nil)
+}
+
+func TestAddCredentialLimitsToMetadata(t *testing.T) {
+	zero := 0
+	positive := 30
+	negative := -1
+
+	metadata := map[string]any{}
+	addCredentialLimitsToMetadata(config.CredentialLimitValues{RPM: &positive, TPM: &zero, MaxConcurrent: &negative}, metadata)
+	if got, ok := metadata["rpm"].(int); !ok || got != 30 {
+		t.Fatalf("rpm = %v, want 30", metadata["rpm"])
+	}
+	if got, ok := metadata["tpm"].(int); !ok || got != 0 {
+		t.Fatalf("tpm = %v, want explicit 0", metadata["tpm"])
+	}
+	if _, exists := metadata["max_concurrent"]; exists {
+		t.Fatalf("negative max-concurrent should be omitted, got %v", metadata["max_concurrent"])
+	}
+
+	metadata = map[string]any{}
+	addCredentialLimitsToMetadata(config.CredentialLimitValues{}, metadata)
+	if len(metadata) != 0 {
+		t.Fatalf("unset limits wrote %v", metadata)
+	}
+
+	addCredentialLimitsToMetadata(config.CredentialLimitValues{RPM: &positive}, nil)
+}
+
+func TestSynthesizeConfigCredentialLimitsReachMetadata(t *testing.T) {
+	rpm := 12
+	maxConcurrent := 2
+	cfg := &config.Config{
+		ClaudeKey: []config.ClaudeKey{{
+			APIKey:                "claude-key",
+			CredentialLimitValues: config.CredentialLimitValues{RPM: &rpm, MaxConcurrent: &maxConcurrent},
+		}},
+	}
+	auths, errSynthesize := NewConfigSynthesizer().Synthesize(&SynthesisContext{
+		Config:      cfg,
+		Now:         time.Unix(1_700_000_000, 0),
+		IDGenerator: NewStableIDGenerator(),
+	})
+	if errSynthesize != nil {
+		t.Fatalf("Synthesize() error = %v", errSynthesize)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("synthesized %d auths, want 1", len(auths))
+	}
+	if got, ok := auths[0].RPMOverride(); !ok || got != 12 {
+		t.Fatalf("rpm override = (%d, %t), want (12, true)", got, ok)
+	}
+	if got, ok := auths[0].MaxConcurrentOverride(); !ok || got != 2 {
+		t.Fatalf("max_concurrent override = (%d, %t), want (2, true)", got, ok)
+	}
+	if _, ok := auths[0].TPMOverride(); ok {
+		t.Fatalf("tpm override should be unset")
+	}
+}
+
+func TestApplyClaudeDeviceProfileFromMetadata(t *testing.T) {
+	auth := &coreauth.Auth{Provider: "claude", Attributes: map[string]string{}}
+	metadata := map[string]any{"device_profile": map[string]any{"os": "Linux", "arch": "x64"}}
+	if err := applyClaudeDeviceProfileFromMetadata(auth, metadata); err != nil {
+		t.Fatalf("apply error = %v", err)
+	}
+	if auth.Attributes[coreauth.AttributeClaudeDeviceOS] != "Linux" || auth.Attributes[coreauth.AttributeClaudeDeviceArch] != "x64" {
+		t.Fatalf("attributes = %v", auth.Attributes)
+	}
+	if _, present := auth.Attributes[coreauth.AttributeClaudeDeviceUserAgent]; present {
+		t.Fatalf("unset software tuple must not be projected")
+	}
+
+	bad := map[string]any{"device_profile": map[string]any{"user_agent": "claude-cli/1.0.0 (external, cli)", "package_version": "0.112.1", "runtime_version": "v26.3.0"}}
+	if err := applyClaudeDeviceProfileFromMetadata(&coreauth.Auth{Provider: "claude"}, bad); err == nil {
+		t.Fatalf("unmeasured tuple accepted")
+	}
+	// Non-Claude providers ignore the object entirely.
+	if err := applyClaudeDeviceProfileFromMetadata(&coreauth.Auth{Provider: "codex"}, bad); err != nil {
+		t.Fatalf("codex auth rejected: %v", err)
+	}
 }

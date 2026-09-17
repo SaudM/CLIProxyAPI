@@ -65,27 +65,34 @@ func claudeOAuthRequestHeaderOrder(method, requestTarget string) []string {
 // OAuth control plane only talks to platform.claude.com and api.anthropic.com,
 // so a small cache covers every reachable server.
 const (
-	claudeOAuthSessionCacheCapacity      = 8
-	claudeOAuthProxySessionCacheCapacity = 64
+	claudeOAuthSessionCacheCapacity = 8
+	// claudeOAuthProxySessionCacheCapacity bounds (credential, proxy) session caches;
+	// an idle entry holds at most claudeOAuthSessionCacheCapacity sessions.
+	claudeOAuthProxySessionCacheCapacity = 8192
 )
 
-// claudeOAuthSessionCaches keys one session cache per effective proxy URL.
+// claudeOAuthSessionCaches keys one session cache per (credential, proxy).
 //
 // ClaudeAuth is constructed per operation (every refresh and every executor
 // profile check builds a new one), so a cache owned by the round tripper would
-// always start empty and never resume. Keying on the proxy instead matches the
-// inference plane, where the whole round tripper is cached per proxy, and keeps
-// resumption from crossing proxy boundaries. TLS sessions are scoped to a
-// server rather than a credential, and connections are already pooled per proxy
-// on the inference plane, so this adds no new cross-credential linkage.
+// always start empty and never resume. Keying on the credential and proxy lets
+// a credential resume its own sessions while a TLS session ticket issued during
+// one account's refresh can never resume a connection carrying another account.
+// The inference plane isolates transports the same way.
 
-var claudeOAuthSessionCaches = internalcache.NewBoundedLRU[string, tls.ClientSessionCache](
+type claudeOAuthSessionCacheKey struct {
+	proxyURL   string
+	credential string
+}
+
+var claudeOAuthSessionCaches = internalcache.NewBoundedLRU[claudeOAuthSessionCacheKey, tls.ClientSessionCache](
 	claudeOAuthProxySessionCacheCapacity,
 	nil,
 )
 
-func claudeOAuthSessionCache(proxyURL string) tls.ClientSessionCache {
-	return claudeOAuthSessionCaches.GetOrAdd(proxyURL, func() tls.ClientSessionCache {
+func claudeOAuthSessionCache(proxyURL, credential string) tls.ClientSessionCache {
+	key := claudeOAuthSessionCacheKey{proxyURL: proxyURL, credential: strings.TrimSpace(credential)}
+	return claudeOAuthSessionCaches.GetOrAdd(key, func() tls.ClientSessionCache {
 		return tls.NewLRUClientSessionCache(claudeOAuthSessionCacheCapacity)
 	})
 }
@@ -175,6 +182,13 @@ type utlsRoundTripper struct {
 }
 
 func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
+	return newUtlsRoundTripperForCredential(cfg, "")
+}
+
+// newUtlsRoundTripperForCredential builds the control-plane transport for one
+// credential. An empty credential scope is the anonymous login flow, which has
+// no account identity to protect yet.
+func newUtlsRoundTripperForCredential(cfg *config.SDKConfig, credential string) *utlsRoundTripper {
 	var dialer proxy.Dialer = proxy.Direct
 	var proxyURL string
 	if cfg != nil {
@@ -189,7 +203,7 @@ func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 
 	roundTripper := &utlsRoundTripper{
 		dialer:       dialer,
-		sessionCache: claudeOAuthSessionCache(proxyURL),
+		sessionCache: claudeOAuthSessionCache(proxyURL, credential),
 	}
 	roundTripper.transport = &http.Transport{
 		ForceAttemptHTTP2: false,
@@ -251,4 +265,10 @@ func (t *utlsRoundTripper) CloseIdleConnections() {
 
 func NewAnthropicHttpClient(cfg *config.SDKConfig) *http.Client {
 	return &http.Client{Transport: newUtlsRoundTripper(cfg)}
+}
+
+// NewAnthropicHttpClientForCredential is NewAnthropicHttpClient with TLS session
+// resumption scoped to one credential.
+func NewAnthropicHttpClientForCredential(cfg *config.SDKConfig, credential string) *http.Client {
+	return &http.Client{Transport: newUtlsRoundTripperForCredential(cfg, credential)}
 }

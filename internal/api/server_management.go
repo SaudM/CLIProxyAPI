@@ -123,6 +123,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/max-retry-interval", s.mgmt.PutMaxRetryInterval)
 		mgmt.PATCH("/max-retry-interval", s.mgmt.PutMaxRetryInterval)
 
+		mgmt.GET("/credential-limits", s.mgmt.GetCredentialLimits)
+		mgmt.PUT("/credential-limits", s.mgmt.PutCredentialLimits)
+		mgmt.PATCH("/credential-limits", s.mgmt.PutCredentialLimits)
+
 		mgmt.GET("/force-model-prefix", s.mgmt.GetForceModelPrefix)
 		mgmt.PUT("/force-model-prefix", s.mgmt.PutForceModelPrefix)
 		mgmt.PATCH("/force-model-prefix", s.mgmt.PutForceModelPrefix)

@@ -215,16 +215,49 @@ func claudeCodeTLSClientHelloSpec() *tls.ClientHelloSpec {
 	}
 }
 
-const claudeCodeRoundTripperCacheCapacity = 64
+// claudeCodeRoundTripperCacheCapacity bounds how many Anthropic inference-plane
+// transports stay alive. One entry exists per (credential, proxy) pair, so it is
+// sized for large multi-account deployments; an idle entry costs one Transport and
+// at most claudeCodeSessionCacheCapacity cached sessions.
+const claudeCodeRoundTripperCacheCapacity = 8192
 
-var claudeCodeRoundTripperCache = internalcache.NewBoundedLRU[string, http.RoundTripper](
+// claudeCodeRoundTripperKey scopes a transport, and therefore its TCP pool and TLS
+// session cache, to one credential behind one proxy. Sharing them across
+// credentials would let a TLS session ticket issued for one account resume a
+// connection carrying another, linking the accounts at the TLS layer.
+type claudeCodeRoundTripperKey struct {
+	proxyURL   string
+	credential string
+}
+
+var claudeCodeRoundTripperCache = internalcache.NewBoundedLRU[claudeCodeRoundTripperKey, http.RoundTripper](
 	claudeCodeRoundTripperCacheCapacity,
-	func(_ string, roundTripper http.RoundTripper) {
+	func(_ claudeCodeRoundTripperKey, roundTripper http.RoundTripper) {
 		if transport, ok := roundTripper.(interface{ CloseIdleConnections() }); ok {
 			transport.CloseIdleConnections()
 		}
 	},
 )
+
+// claudeCodeTransportScope identifies the credential that owns a transport. It
+// mirrors antigravityTransportScope so both providers isolate pools the same way.
+func claudeCodeTransportScope(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(auth.ID); id != "" {
+		return "id:" + id
+	}
+	if auth.Attributes != nil {
+		if path := strings.TrimSpace(auth.Attributes[cliproxyauth.AttributePath]); path != "" {
+			return "path:" + path
+		}
+		if source := strings.TrimSpace(auth.Attributes[cliproxyauth.AttributeSource]); source != "" {
+			return "source:" + source
+		}
+	}
+	return ""
+}
 
 var claudeCodeMessagesHeaderOrder = []string{
 	"Accept",
@@ -282,15 +315,16 @@ func claudeCodeRequestHeaderOrder(_, requestTarget string) []string {
 	return claudeCodeMessagesHeaderOrder
 }
 
-func cachedClaudeCodeRoundTripper(proxyURL string) http.RoundTripper {
-	return claudeCodeRoundTripperCache.GetOrAdd(proxyURL, func() http.RoundTripper {
+func cachedClaudeCodeRoundTripper(proxyURL string, auth *cliproxyauth.Auth) http.RoundTripper {
+	key := claudeCodeRoundTripperKey{proxyURL: proxyURL, credential: claudeCodeTransportScope(auth)}
+	return claudeCodeRoundTripperCache.GetOrAdd(key, func() http.RoundTripper {
 		return newClaudeCodeRoundTripper(proxyURL)
 	})
 }
 
 func newClaudeCodeRoundTripper(proxyURL string) http.RoundTripper {
-	// The cache is scoped to this round tripper, which is already keyed by proxy,
-	// so resumption never crosses proxy boundaries.
+	// The session cache is owned by this round tripper, which is keyed by
+	// (credential, proxy), so TLS resumption never crosses either boundary.
 	sessionCache := tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity)
 	var dialer proxy.Dialer = proxy.Direct
 	if proxyURL != "" {
@@ -381,7 +415,7 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 	}
 
 	var chromeRT http.RoundTripper = newUtlsRoundTripper(proxyURL)
-	var anthropicRT http.RoundTripper = cachedClaudeCodeRoundTripper(proxyURL)
+	var anthropicRT http.RoundTripper = cachedClaudeCodeRoundTripper(proxyURL, auth)
 	var standardTransport http.RoundTripper = http.DefaultTransport
 	if proxyURL != "" {
 		if transport := buildProxyTransport(proxyURL); transport != nil {

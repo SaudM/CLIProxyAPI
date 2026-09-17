@@ -112,6 +112,23 @@ func addRequestRetryToMetadata(requestRetry *int, metadata map[string]any) {
 	metadata["request_retry"] = *requestRetry
 }
 
+// addCredentialLimitsToMetadata copies per-credential rpm/tpm/max_concurrent overrides into metadata.
+// Nil or negative values are treated as unset and are not written.
+func addCredentialLimitsToMetadata(limits config.CredentialLimitValues, metadata map[string]any) {
+	if metadata == nil {
+		return
+	}
+	if limits.RPM != nil && *limits.RPM >= 0 {
+		metadata["rpm"] = *limits.RPM
+	}
+	if limits.TPM != nil && *limits.TPM >= 0 {
+		metadata["tpm"] = *limits.TPM
+	}
+	if limits.MaxConcurrent != nil && *limits.MaxConcurrent >= 0 {
+		metadata["max_concurrent"] = *limits.MaxConcurrent
+	}
+}
+
 // addRequestScopedErrorsToMetadata copies per-credential request-scoped error rules into metadata.
 func addRequestScopedErrorsToMetadata(rules []config.RequestScopedErrorRule, metadata map[string]any) {
 	if len(rules) == 0 || metadata == nil {
@@ -148,6 +165,50 @@ func applyFingerprintProfileAttribute(auth *coreauth.Auth, metadata map[string]a
 		auth.Attributes = make(map[string]string)
 	}
 	auth.Attributes["fingerprint_profile"] = profile
+}
+
+// addClaudeDeviceProfileToAttrs projects a per-credential Claude Code device
+// profile override into auth attributes. Empty fields are left unset so they
+// inherit claude-header-defaults at request time.
+func addClaudeDeviceProfileToAttrs(profile config.ClaudeDeviceProfileValues, attrs map[string]string) {
+	if attrs == nil {
+		return
+	}
+	profile = profile.Trimmed()
+	set := func(key, value string) {
+		if value != "" {
+			attrs[key] = value
+		}
+	}
+	set(coreauth.AttributeClaudeDeviceUserAgent, profile.UserAgent)
+	set(coreauth.AttributeClaudeDevicePackageVersion, profile.PackageVersion)
+	set(coreauth.AttributeClaudeDeviceRuntimeVersion, profile.RuntimeVersion)
+	set(coreauth.AttributeClaudeDeviceOS, profile.OS)
+	set(coreauth.AttributeClaudeDeviceArch, profile.Arch)
+}
+
+// applyClaudeDeviceProfileFromMetadata validates and projects the auth-file
+// "device_profile" object for Claude credentials. A malformed or unmeasured
+// profile is an error so the file is rejected instead of silently falling back.
+func applyClaudeDeviceProfileFromMetadata(auth *coreauth.Auth, metadata map[string]any) error {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+		return nil
+	}
+	profile, errDecode := config.ClaudeDeviceProfileValuesFromMetadata(metadata)
+	if errDecode != nil {
+		return errDecode
+	}
+	if profile.IsZero() {
+		return nil
+	}
+	if errValidate := profile.Validate(); errValidate != nil {
+		return fmt.Errorf("device_profile: %w", errValidate)
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	addClaudeDeviceProfileToAttrs(profile, auth.Attributes)
+	return nil
 }
 
 // addConfigHeadersToAttrs adds header configuration to auth attributes.

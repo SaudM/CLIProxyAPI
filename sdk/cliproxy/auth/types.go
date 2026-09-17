@@ -524,6 +524,34 @@ func (a *Auth) RequestRetryOverride() (int, bool) {
 	return 0, false
 }
 
+// RPMOverride returns the auth-scoped rpm override when present.
+func (a *Auth) RPMOverride() (int, bool) { return a.metadataIntOverride("rpm") }
+
+// TPMOverride returns the auth-scoped tpm override when present.
+func (a *Auth) TPMOverride() (int, bool) { return a.metadataIntOverride("tpm") }
+
+// MaxConcurrentOverride returns the auth-scoped max_concurrent override when present.
+func (a *Auth) MaxConcurrentOverride() (int, bool) {
+	return a.metadataIntOverride("max_concurrent")
+}
+
+// metadataIntOverride reads a non-negative integer override from metadata.
+// A negative value is treated as unset.
+func (a *Auth) metadataIntOverride(key string) (int, bool) {
+	if a == nil || a.Metadata == nil {
+		return 0, false
+	}
+	val, ok := a.Metadata[key]
+	if !ok {
+		return 0, false
+	}
+	parsed, okParse := parseIntAny(val)
+	if !okParse || parsed < 0 {
+		return 0, false
+	}
+	return parsed, true
+}
+
 func parseBoolAny(val any) (bool, bool) {
 	switch typed := val.(type) {
 	case bool:

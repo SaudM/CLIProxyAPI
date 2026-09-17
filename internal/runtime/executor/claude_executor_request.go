@@ -1207,10 +1207,10 @@ func applyClaudeHeadersWithNativeProfile(
 		if confirmedClaudeCode {
 			helps.ApplyClaudeDeviceProfileHeaders(r, deviceProfile)
 		} else {
-			helps.ApplyClaudeDefaultDeviceProfileHeaders(r, cfg)
+			helps.ApplyClaudeDefaultDeviceProfileHeaders(r, cfg, auth)
 		}
 	} else {
-		helps.ApplyClaudeLegacyDeviceHeaders(r, incomingHeaders, cfg, confirmedClaudeCode)
+		helps.ApplyClaudeLegacyDeviceHeaders(r, incomingHeaders, cfg, auth, confirmedClaudeCode)
 	}
 	var attrs map[string]string
 	if auth != nil {

@@ -189,6 +189,30 @@ func ReadMetadataString(metadata *map[string]any, key string) string {
 	return value
 }
 
+// ReadMetadataObject returns a shallow copy of an object-valued metadata entry,
+// taken under the metadata lock so the caller can decode it without racing
+// concurrent writers. It returns nil when the key is absent or not an object.
+func ReadMetadataObject(metadata *map[string]any, key string) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	claudeDevicePoolMu.Lock()
+	defer claudeDevicePoolMu.Unlock()
+
+	if *metadata == nil {
+		return nil
+	}
+	object, ok := (*metadata)[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	copied := make(map[string]any, len(object))
+	for k, v := range object {
+		copied[k] = v
+	}
+	return copied
+}
+
 // StoreMetadataString writes a string-valued metadata entry under the metadata
 // lock, initializing the map when needed. Empty values are skipped so callers can
 // forward optional fields without erasing a previously resolved value.

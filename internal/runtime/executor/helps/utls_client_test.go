@@ -336,23 +336,39 @@ func TestCachedClaudeCodeRoundTripperReusesTransport(t *testing.T) {
 	t.Parallel()
 
 	const proxyURL = "http://127.0.0.1:29653"
-	first := cachedClaudeCodeRoundTripper(proxyURL)
-	second := cachedClaudeCodeRoundTripper(proxyURL)
+	auth := &cliproxyauth.Auth{ID: "claude-reuse"}
+	first := cachedClaudeCodeRoundTripper(proxyURL, auth)
+	second := cachedClaudeCodeRoundTripper(proxyURL, auth)
 	if first != second {
-		t.Fatal("Claude Code transport cache returned different transports for one proxy")
+		t.Fatal("Claude Code transport cache returned different transports for one credential and proxy")
+	}
+}
+
+func TestCachedClaudeCodeRoundTripperIsolatesCredentials(t *testing.T) {
+	t.Parallel()
+
+	const proxyURL = "http://127.0.0.1:29654"
+	first := cachedClaudeCodeRoundTripper(proxyURL, &cliproxyauth.Auth{ID: "claude-a"})
+	second := cachedClaudeCodeRoundTripper(proxyURL, &cliproxyauth.Auth{ID: "claude-b"})
+	if first == second {
+		t.Fatal("two credentials behind one proxy share a transport, so they would share TLS session tickets")
+	}
+	anonymous := cachedClaudeCodeRoundTripper(proxyURL, nil)
+	if anonymous == first || anonymous == second {
+		t.Fatal("credential-less transport must not alias a credential's transport")
 	}
 }
 
 func TestCachedClaudeCodeRoundTripperBoundsProxyCardinality(t *testing.T) {
 	firstProxy := fmt.Sprintf("http://127.0.0.1:%d", 30000)
-	first := cachedClaudeCodeRoundTripper(firstProxy)
+	first := cachedClaudeCodeRoundTripper(firstProxy, nil)
 	for index := 1; index <= claudeCodeRoundTripperCacheCapacity; index++ {
-		cachedClaudeCodeRoundTripper(fmt.Sprintf("http://127.0.0.1:%d", 30000+index))
+		cachedClaudeCodeRoundTripper(fmt.Sprintf("http://127.0.0.1:%d", 30000+index), nil)
 	}
 	if got := claudeCodeRoundTripperCache.Len(); got > claudeCodeRoundTripperCacheCapacity {
 		t.Fatalf("transport cache entries = %d, want at most %d", got, claudeCodeRoundTripperCacheCapacity)
 	}
-	if recreated := cachedClaudeCodeRoundTripper(firstProxy); recreated == first {
+	if recreated := cachedClaudeCodeRoundTripper(firstProxy, nil); recreated == first {
 		t.Fatal("least recently used proxy transport was not evicted")
 	}
 }

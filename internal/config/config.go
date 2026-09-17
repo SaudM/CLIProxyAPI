@@ -92,6 +92,10 @@ type Config struct {
 	// failover or immediate additional rounds allowed by RequestRetry.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
 
+	// CredentialLimits defines global defaults for per-credential RPM, TPM and
+	// in-flight request limits. Zero values mean unlimited.
+	CredentialLimits CredentialLimits `yaml:"credential-limits" json:"credential-limits"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 

@@ -50,6 +50,11 @@ func (s *Service) Run(ctx context.Context) error {
 	}()
 
 	usage.StartDefault(ctx)
+	if s.coreManager != nil {
+		// Feed usage records into the per-credential TPM windows. Named registration
+		// keeps restarts idempotent on the process-global usage manager.
+		usage.RegisterNamedPlugin("credential-limits", coreauth.NewCredentialLimitUsagePlugin(s.coreManager))
+	}
 	homeEnabled := s.cfg != nil && s.cfg.Home.Enabled
 	if homeEnabled {
 		forceHomeRuntimeConfig(s.cfg)

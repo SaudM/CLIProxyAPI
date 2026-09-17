@@ -266,7 +266,7 @@ func claudeBillingFingerprintMessageText(payload []byte) string {
 	return ""
 }
 
-func claudeCCHFallbackBillingHeader(ctx context.Context, cfg *config.Config, payload []byte, entrypoint string) string {
+func claudeCCHFallbackBillingHeader(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, payload []byte, entrypoint string) string {
 	isProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(payload)
 	prevReq, promptID := helps.ExtractClaudeBillingTags(payload)
 	if !isProbeOrHelper {
@@ -280,9 +280,10 @@ func claudeCCHFallbackBillingHeader(ctx context.Context, cfg *config.Config, pay
 	}
 	incomingHeaders := resolveIncomingClaudeHeaders(ctx, helps.IncomingHeadersFromContext(ctx))
 	isSubagent := helps.IsClaudeSubagentRequest(incomingHeaders, payload)
+	// cc_version must agree with the User-Agent sent for this credential.
 	return generateBillingHeader(
 		true,
-		helps.DefaultClaudeVersion(cfg),
+		helps.CredentialClaudeVersion(cfg, auth),
 		claudeBillingFingerprintMessageText(payload),
 		entrypoint,
 		getWorkloadFromContext(ctx),
@@ -1382,7 +1383,8 @@ func applyCloakingInternal(
 		}
 	}
 
-	billingVersion := helps.DefaultClaudeVersion(cfg)
+	// cc_version must agree with the User-Agent sent for this credential.
+	billingVersion := helps.CredentialClaudeVersion(cfg, auth)
 	workload := getWorkloadFromContext(ctx)
 
 	isProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(payload)

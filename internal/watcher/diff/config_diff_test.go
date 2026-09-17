@@ -215,6 +215,7 @@ func TestBuildConfigChangeDetails_CodexOrphanDelegationCompatibility(t *testing.
 func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 	oldRetry := 1
 	newRetry := 0
+	newRPM := 30
 	oldDisableCooling := false
 	newDisableCooling := true
 	oldCfg := &config.Config{XAIKey: []config.XAIKey{{
@@ -231,17 +232,18 @@ func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 		ExcludedModels: []string{"grok-hidden"},
 	}}}
 	newCfg := &config.Config{XAIKey: []config.XAIKey{{
-		APIKey:         "new-key",
-		Priority:       2,
-		Prefix:         "new",
-		BaseURL:        "https://new.example.com/v1",
-		ProxyURL:       "http://new-proxy",
-		Websockets:     true,
-		DisableCooling: &newDisableCooling,
-		RequestRetry:   &newRetry,
-		Headers:        map[string]string{"X-Test": "new"},
-		Models:         []config.XAIModel{{Name: "grok-new", Alias: "grok"}},
-		ExcludedModels: []string{"grok-other"},
+		APIKey:                "new-key",
+		Priority:              2,
+		Prefix:                "new",
+		BaseURL:               "https://new.example.com/v1",
+		ProxyURL:              "http://new-proxy",
+		Websockets:            true,
+		DisableCooling:        &newDisableCooling,
+		RequestRetry:          &newRetry,
+		CredentialLimitValues: config.CredentialLimitValues{RPM: &newRPM},
+		Headers:               map[string]string{"X-Test": "new"},
+		Models:                []config.XAIModel{{Name: "grok-new", Alias: "grok"}},
+		ExcludedModels:        []string{"grok-other"},
 	}}}
 
 	changes := BuildConfigChangeDetails(oldCfg, newCfg)
@@ -252,6 +254,7 @@ func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 	expectContains(t, changes, "xai[0].websockets: false -> true")
 	expectContains(t, changes, "xai[0].disable-cooling: false -> true")
 	expectContains(t, changes, "xai[0].request-retry: 1 -> 0")
+	expectContains(t, changes, "xai[0].rpm: <unset> -> 30")
 	expectContains(t, changes, "xai[0].api-key: updated")
 	expectContains(t, changes, "xai[0].headers: updated")
 	expectContains(t, changes, "xai[0].models: updated (1 -> 1 entries)")
@@ -455,6 +458,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 }
 
 func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
+	newRPMGlobal := 20
 	oldCfg := &config.Config{
 		Port:                          1,
 		AuthDir:                       "/a",
@@ -516,8 +520,12 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 		RequestRetry:                  2,
 		MaxRetryCredentials:           3,
 		MaxRetryInterval:              3,
-		WebsocketAuth:                 true,
-		QuotaExceeded:                 config.QuotaExceeded{SwitchProject: true, SwitchPreviewModel: true, AntigravityCredits: true},
+		CredentialLimits: config.CredentialLimits{
+			RPM:       60,
+			Providers: map[string]config.CredentialLimitValues{"claude": {RPM: &newRPMGlobal}},
+		},
+		WebsocketAuth: true,
+		QuotaExceeded: config.QuotaExceeded{SwitchProject: true, SwitchPreviewModel: true, AntigravityCredits: true},
 		GeminiKey: []config.GeminiKey{
 			{APIKey: "g-new", BaseURL: "http://g-new", ProxyURL: "http://gp-new", Headers: map[string]string{"A": "2"}, ExcludedModels: []string{"x", "y"}},
 		},
@@ -573,6 +581,8 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 	expectContains(t, changes, "request-retry: 1 -> 2")
 	expectContains(t, changes, "max-retry-credentials: 1 -> 3")
 	expectContains(t, changes, "max-retry-interval: 1 -> 3")
+	expectContains(t, changes, "credential-limits.rpm: 0 -> 60")
+	expectContains(t, changes, "credential-limits.providers updated")
 	expectContains(t, changes, "proxy-url: http://old-proxy -> http://new-proxy")
 	expectContains(t, changes, "ws-auth: false -> true")
 	expectContains(t, changes, "quota-exceeded.switch-project: false -> true")

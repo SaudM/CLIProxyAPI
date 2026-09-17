@@ -183,6 +183,31 @@ max-retry-credentials: 0
 # Retry rounds that need no wait remain controlled by request-retry.
 max-retry-interval: 30
 
+# Per-credential consumption limits. All values default to 0 (unlimited).
+# A credential over any limit is skipped for the current retry round and another
+# credential is picked; when every candidate is over limit the request waits for the
+# earliest recovery (bounded by request-retry / max-retry-interval) and otherwise
+# returns HTTP 429 with a Retry-After header.
+#   rpm            requests per credential in a rolling 60 second window, counted at admission
+#   tpm            total tokens (input + output, including cache read/write and reasoning)
+#                  per credential in a rolling 60 second window. Tokens are accounted after
+#                  the response, so a single request may overshoot by its own size.
+#   max-concurrent in-flight requests per credential; a slot is held from selection until
+#                  the response (or stream) finishes. In Home mode this is an extra local
+#                  cap on top of the Home concurrency policy.
+# Token counting requests (count_tokens) are exempt from all three limits.
+# Per-provider defaults override the top-level values; a credential's own rpm/tpm/max-concurrent
+# fields (YAML entry or auth JSON file) override both. Explicit 0 means unlimited.
+# credential-limits:
+#   rpm: 0
+#   tpm: 0
+#   max-concurrent: 0
+#   providers:
+#     claude:
+#       rpm: 60
+#       tpm: 400000
+#       max-concurrent: 8
+
 # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).
 # A credential/provider disable-cooling value, when present, overrides this global value.
 disable-cooling: false
@@ -419,6 +444,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "test" # optional: require calls like "test/gemini-3-pro-preview" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400        # HTTP status code to match
 #         match:             # optional: string contains matching
@@ -461,6 +489,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "native" # optional: require calls like "native/gemini-3-pro-preview" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400
 #         match:
@@ -491,6 +522,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "test" # optional: require calls like "test/gpt-5-codex" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400
 #         match:
@@ -533,6 +567,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "xai" # optional: require calls like "xai/grok-4.5" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400
 #         match:
@@ -568,6 +605,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "meta" # optional: require calls like "meta/muse-spark-1.3" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     base-url: "https://api.meta.ai/v1" # optional: defaults to https://api.meta.ai/v1
 #     proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
 #     models:
@@ -584,6 +624,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "test" # optional: require calls like "test/claude-sonnet-latest" to target this credential
 #     disable-cooling: false # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400
 #         match:
@@ -704,6 +747,19 @@ nonstream-keepalive-interval: 0
 # verified native OS/arch values remain client-supplied. When stabilize-device-profile is
 # enabled, OS/arch are pinned to the values below and cached profiles remain constrained to
 # the same exact software baseline rather than learning newer client versions.
+# Per-credential override: a claude-api-key entry may carry a "device-profile" block and a
+# Claude OAuth JSON file a "device_profile" object with the same fields. Use it so accounts
+# on one node do not all present an identical software/platform tuple. user-agent,
+# package-version and runtime-version are validated as a unit against measured Claude Code
+# releases (a mix no real client ships is rejected); os/arch accept the Stainless names
+# (MacOS/Windows/Linux/FreeBSD, arm64/x64/x86). The billing cc_version follows the
+# credential's user-agent automatically.
+#   device-profile:
+#     user-agent: "claude-cli/2.1.258 (external, cli)"
+#     package-version: "0.112.1"
+#     runtime-version: "v26.3.0"
+#     os: "Linux"
+#     arch: "x64"
 # claude-header-defaults:
 #   user-agent: "claude-cli/2.1.258 (external, cli)"
 #   package-version: "0.112.1"
@@ -731,6 +787,9 @@ nonstream-keepalive-interval: 0
 #     support-prompt-cache-key: false # optional: derive prompt_cache_key for requests from all input protocols
 #     disable-cooling: false # optional provider override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3 # optional per-provider override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60 # optional per-provider override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000 # optional per-provider override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8 # optional per-provider override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     request-scoped-errors: # optional: custom rules to classify upstream errors by status and body patterns
 #       - status: 400
 #         match:
@@ -781,6 +840,9 @@ nonstream-keepalive-interval: 0
 #     prefix: "test"                              # optional: require calls like "test/vertex-pro" to target this credential
 #     disable-cooling: false                       # optional override: true disables cooling, false enables it; omit to inherit global
 #     request-retry: 3                             # optional per-auth override; 0 disables additional rounds; omit or set < 0 to inherit global
+#     rpm: 60                                      # optional per-auth override of credential-limits.rpm; 0 = unlimited; omit to inherit
+#     tpm: 400000                                  # optional per-auth override of credential-limits.tpm; 0 = unlimited; omit to inherit
+#     max-concurrent: 8                            # optional per-auth override of credential-limits.max-concurrent; 0 = unlimited; omit to inherit
 #     base-url: "https://example.com/api"         # optional, e.g. https://zenmux.ai/api; falls back to Google Vertex when omitted
 #     proxy-url: "socks5://proxy.example.com:1080" # optional per-key proxy override
 #     # proxy-url: "direct" # optional: explicit direct connect for this credential

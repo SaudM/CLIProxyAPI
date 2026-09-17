@@ -477,7 +477,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	attempted := make(map[string]struct{})
 	var lastErr error
 	var upstreamErr error
+	var limitTracker credentialLimitTracker
+	defer limitTracker.release()
 	for {
+		limitTracker.release()
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -492,11 +495,23 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
+			if errLimit := limitTracker.pickFailureError(m, lastErr, errPick); errLimit != nil {
+				return cliproxyexecutor.Response{}, errLimit
+			}
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
 			}
 			return cliproxyexecutor.Response{}, errPick
 		}
+		// Local rpm/tpm/max_concurrent admission: a refused credential is skipped for this
+		// round without counting as an attempt, so the loop moves on to the next one.
+		lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+		if !okLease {
+			tried[auth.ID] = struct{}{}
+			limitTracker.noteRefusal(blockedUntil)
+			continue
+		}
+		limitTracker.hold(lease)
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, routeModel)
@@ -913,7 +928,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	var lastErr error
 	var upstreamErr error
 	var roundTiming homeRetryRoundTiming
+	var limitTracker credentialLimitTracker
+	defer limitTracker.release()
 	for {
+		limitTracker.release()
 		allowSameAuthRetry := homeMode && homeSameAuthRetryPending && lastHomeAuthID != "" && homeSameAuthRetries[lastHomeAuthID] == 0
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials && !allowSameAuthRetry {
 			if lastErr != nil {
@@ -948,6 +966,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth, executor, provider, errPick = m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		}
 		if errPick != nil {
+			if errLimit := limitTracker.pickFailureError(m, lastErr, errPick); errLimit != nil {
+				return nil, errLimit
+			}
 			preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
 			var homeCooldown *homeDispatchRetryAfterError
 			if homeMode && lastErr != nil && errors.As(errPick, &homeCooldown) && homeCooldown != nil {
@@ -1012,6 +1033,22 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				}
 			}
 		}
+
+		// Local rpm/tpm/max_concurrent admission runs after Home's repeat checks so a
+		// refused credential is excluded from the next dispatch and its slot returned.
+		lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+		if !okLease {
+			tried[auth.ID] = struct{}{}
+			limitTracker.noteRefusal(blockedUntil)
+			if selection != nil {
+				homeExcludedAuthIDs[auth.ID] = struct{}{}
+				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "local_credential_limit"); errEnd != nil {
+					return nil, errEnd
+				}
+			}
+			continue
+		}
+		limitTracker.hold(lease)
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, routeModel)
@@ -1152,7 +1189,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			models = models[:1]
 			pooled = false
 		}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil)
+		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, execOpts, routeModel, streamExecutionModel, models, pooled, aliasResult, routing, !homeMode || selection != nil, selection != nil, limitTracker.activeLease)
+		if errStream == nil {
+			// The stream wrapper now owns the lease and releases it when the stream ends.
+			limitTracker.detach()
+		}
 		if errStream != nil {
 			if hasUpstreamExecutionAttempt(errStream) {
 				upstreamErr = errStream

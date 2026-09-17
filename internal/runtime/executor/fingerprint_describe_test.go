@@ -44,7 +44,7 @@ func assertNoSecretLeak(t *testing.T, report map[string]any, secrets ...string) 
 func TestClaudeExecutor_DescribeFingerprint_OAuthCloaks(t *testing.T) {
 	const token = "sk-ant-oat01-secret-token-value"
 	cfg := &config.Config{}
-	cfg.ClaudeHeaderDefaults.UserAgent = "claude-cli/2.1.258 (external, cli)"
+	cfg.ClaudeHeaderDefaults.UserAgent = "claude-cli/2.1.274 (external, cli)"
 	cfg.ClaudeHeaderDefaults.Timezone = "Asia/Singapore"
 	auth := &cliproxyauth.Auth{
 		ID:       "claude-oauth",
@@ -64,7 +64,7 @@ func TestClaudeExecutor_DescribeFingerprint_OAuthCloaks(t *testing.T) {
 	if report["auth_kind"] != "oauth" {
 		t.Fatalf("auth_kind = %v", report["auth_kind"])
 	}
-	if report["user_agent"] != "claude-cli/2.1.258 (external, cli)" {
+	if report["user_agent"] != "claude-cli/2.1.274 (external, cli)" {
 		t.Fatalf("user_agent = %v", report["user_agent"])
 	}
 	client := report["client"].(map[string]any)
@@ -79,7 +79,7 @@ func TestClaudeExecutor_DescribeFingerprint_OAuthCloaks(t *testing.T) {
 		t.Fatalf("custom_headers = %v", overrides["custom_headers"])
 	}
 	transport := report["transport"].(map[string]any)
-	if transport["tls"] != "utls-node" || transport["http"] != "1.1" {
+	if transport["tls"] != "utls-claude-code-bun" || transport["http"] != "1.1" {
 		t.Fatalf("transport = %v", transport)
 	}
 	if !strings.HasPrefix(transport["proxy"].(string), "socks5://redacted@proxy.local:1080") {
@@ -245,7 +245,7 @@ func TestClaudeExecutor_DescribeFingerprint_DeviceProfileOverrideDrivesUAAndCCVe
 		Provider: "claude",
 		Metadata: map[string]any{"access_token": "sk-ant-oat01-x"},
 		Attributes: map[string]string{
-			cliproxyauth.AttributeClaudeDeviceUserAgent:      "claude-cli/2.1.258 (external, cli)",
+			cliproxyauth.AttributeClaudeDeviceUserAgent:      "claude-cli/2.1.274 (external, cli)",
 			cliproxyauth.AttributeClaudeDevicePackageVersion: "0.112.1",
 			cliproxyauth.AttributeClaudeDeviceRuntimeVersion: "v26.3.0",
 			cliproxyauth.AttributeClaudeDeviceOS:             "Linux",
@@ -253,18 +253,18 @@ func TestClaudeExecutor_DescribeFingerprint_DeviceProfileOverrideDrivesUAAndCCVe
 		},
 	}
 	report := NewClaudeExecutor(cfg).DescribeFingerprint(auth)
-	if report["user_agent"] != "claude-cli/2.1.258 (external, cli)" {
+	if report["user_agent"] != "claude-cli/2.1.274 (external, cli)" {
 		t.Fatalf("user_agent = %v, want credential override", report["user_agent"])
 	}
-	if report["cc_version"] != "2.1.258" {
-		t.Fatalf("cc_version = %v, want 2.1.258 (must follow the credential user-agent)", report["cc_version"])
+	if report["cc_version"] != "2.1.274" {
+		t.Fatalf("cc_version = %v, want 2.1.274 (must follow the credential user-agent)", report["cc_version"])
 	}
 	device := report["device"].(map[string]any)
 	if device["os"] != "Linux" || device["arch"] != "x64" || device["source"] != "credential" {
 		t.Fatalf("device = %v", device)
 	}
 	override := report["credential_overrides"].(map[string]any)["device_profile"].(map[string]string)
-	if override["os"] != "Linux" || override["user_agent"] != "claude-cli/2.1.258 (external, cli)" {
+	if override["os"] != "Linux" || override["user_agent"] != "claude-cli/2.1.274 (external, cli)" {
 		t.Fatalf("device_profile override = %v", override)
 	}
 }

@@ -11,24 +11,24 @@ import (
 
 func TestClaudeExecutor_DescribeFingerprint_ReportsDownstreamVersions(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.ClaudeHeaderDefaults.UserAgent = "claude-cli/2.1.258 (external, cli)"
+	cfg.ClaudeHeaderDefaults.UserAgent = "claude-cli/2.1.274 (external, cli)"
 	auth := &cliproxyauth.Auth{ID: "claude-clients-report", Provider: "claude", Metadata: map[string]any{"access_token": "sk-ant-oat01-x"}}
-	helps.RecordClaudeClientVersion(auth.ID, "claude-cli/2.1.258 (external, cli)")
+	helps.RecordClaudeClientVersion(auth.ID, "claude-cli/2.1.274 (external, cli)")
 	helps.RecordClaudeClientVersion(auth.ID, "claude-cli/2.1.301 (external, cli)")
 
 	report := NewClaudeExecutor(cfg).DescribeFingerprint(auth)
 	clients, ok := report["clients"].(map[string]any)
-	if !ok || clients["baseline"] != "2.1.258" {
+	if !ok || clients["baseline"] != "2.1.274" {
 		t.Fatalf("clients = %v", report["clients"])
 	}
 	versions := clients["versions"].([]map[string]any)
-	if len(versions) != 2 || versions[0]["version"] != "2.1.258" || versions[0]["baseline"] != true || versions[1]["baseline"] != false {
+	if len(versions) != 2 || versions[0]["version"] != "2.1.274" || versions[0]["baseline"] != true || versions[1]["baseline"] != false {
 		t.Fatalf("versions = %v", versions)
 	}
 	warnings, _ := report["warnings"].([]string)
 	found := false
 	for _, warning := range warnings {
-		if strings.Contains(warning, "2.1.301 (1 requests)") && strings.Contains(warning, "baseline 2.1.258") {
+		if strings.Contains(warning, "2.1.301 (1 requests)") && strings.Contains(warning, "baseline 2.1.274") {
 			found = true
 		}
 	}

@@ -46,11 +46,11 @@ func newResumptionTestCertificate(t *testing.T) gotls.Certificate {
 	return gotls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
 }
 
-// TestClaudeCodeTLSSessionResumptionCompletesHandshake proves the Claude Code
-// inference ClientHello can actually resume: the spec places pre_shared_key
-// after the padding extension, so a malformed ordering or padding interaction
-// would surface here as a handshake failure rather than a silent regression.
-func TestClaudeCodeTLSSessionResumptionCompletesHandshake(t *testing.T) {
+// TestClaudeCodeTLSNeverResumes proves two consecutive dials through the
+// production config both complete full handshakes: the native Claude Code
+// client never resumes, so a second connection must not present a
+// pre_shared_key even after the server issued session tickets.
+func TestClaudeCodeTLSNeverResumes(t *testing.T) {
 	certificate := newResumptionTestCertificate(t)
 	roots := x509.NewCertPool()
 	roots.AddCert(certificate.Leaf)
@@ -90,7 +90,6 @@ func TestClaudeCodeTLSSessionResumptionCompletesHandshake(t *testing.T) {
 		}
 	}()
 
-	sessionCache := tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity)
 	dial := func(round int) (resumed bool, helloLength int) {
 		raw, errDial := net.Dial("tcp", listener.Addr().String())
 		if errDial != nil {
@@ -102,7 +101,7 @@ func TestClaudeCodeTLSSessionResumptionCompletesHandshake(t *testing.T) {
 			}
 		}()
 
-		config := newClaudeCodeTLSConfig("api.anthropic.com", sessionCache)
+		config := newClaudeCodeTLSConfig("api.anthropic.com")
 		config.RootCAs = roots
 		conn := tls.UClient(raw, config, tls.HelloCustom)
 		if errPreset := conn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
@@ -124,13 +123,13 @@ func TestClaudeCodeTLSSessionResumptionCompletesHandshake(t *testing.T) {
 		t.Fatal("first handshake reported resumption without a cached session")
 	}
 	secondResumed, secondLength := dial(2)
-	if !secondResumed {
-		t.Fatal("second handshake did not resume, so the session cache is not effective")
+	if secondResumed {
+		t.Fatal("second handshake resumed, but the native Claude Code client never resumes sessions")
 	}
 
-	// The padding extension absorbs the pre_shared_key bytes, so a resumed
-	// ClientHello keeps the same BoringSSL padding boundary as a fresh one.
+	// Without resumption the second ClientHello carries no pre_shared_key and is
+	// byte-for-byte the same shape as the first.
 	if firstLength != secondLength {
-		t.Fatalf("resumed ClientHello length = %d, want %d to match the fresh handshake", secondLength, firstLength)
+		t.Fatalf("second ClientHello length = %d, want %d to match the fresh handshake", secondLength, firstLength)
 	}
 }

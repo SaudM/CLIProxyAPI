@@ -55,6 +55,10 @@ func (s *Server) setupRoutes() {
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
+	// Claude Code probes HEAD /api/hello against its base URL at every start,
+	// without credentials; the handler replays it upstream per credential.
+	s.engine.HEAD("/api/hello", claudeCodeHandlers.ClaudeHello)
+	s.engine.GET("/api/hello", claudeCodeHandlers.ClaudeHello)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 	s.codexLiveHandler = codexlive.NewHandler(s.handlers.AuthManager, s.cfg)
 

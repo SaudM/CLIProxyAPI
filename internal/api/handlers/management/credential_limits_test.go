@@ -264,12 +264,12 @@ func TestListAuthFiles_ExposesFingerprintWhenExecutorDescribes(t *testing.T) {
 func TestPatchAuthFileFields_ClaudeDeviceProfile(t *testing.T) {
 	h, manager := newLimitsTestHandler(t)
 
-	body := `{"name":"limits.json","device_profile":{"user_agent":"claude-cli/2.1.258 (external, cli)","package_version":"0.112.1","runtime_version":"v26.3.0","os":"Linux","arch":"x64"}}`
+	body := `{"name":"limits.json","device_profile":{"user_agent":"claude-cli/2.1.274 (external, cli)","package_version":"0.112.1","runtime_version":"v26.3.0","os":"Linux","arch":"x64"}}`
 	if rec := patchAuthFileFields(t, h, body); rec.Code != http.StatusOK {
 		t.Fatalf("set status = %d body %s", rec.Code, rec.Body.String())
 	}
 	updated, _ := manager.GetByID("limits.json")
-	if updated.Attributes[coreauth.AttributeClaudeDeviceUserAgent] != "claude-cli/2.1.258 (external, cli)" || updated.Attributes[coreauth.AttributeClaudeDeviceOS] != "Linux" {
+	if updated.Attributes[coreauth.AttributeClaudeDeviceUserAgent] != "claude-cli/2.1.274 (external, cli)" || updated.Attributes[coreauth.AttributeClaudeDeviceOS] != "Linux" {
 		t.Fatalf("device profile attributes not projected: %v", updated.Attributes)
 	}
 

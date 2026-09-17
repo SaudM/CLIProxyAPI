@@ -794,13 +794,13 @@ nonstream-keepalive-interval: 0
 # (MacOS/Windows/Linux/FreeBSD, arm64/x64/x86). The billing cc_version follows the
 # credential's user-agent automatically.
 #   device-profile:
-#     user-agent: "claude-cli/2.1.258 (external, cli)"
+#     user-agent: "claude-cli/2.1.274 (external, cli)"
 #     package-version: "0.112.1"
 #     runtime-version: "v26.3.0"
 #     os: "Linux"
 #     arch: "x64"
 # claude-header-defaults:
-#   user-agent: "claude-cli/2.1.258 (external, cli)"
+#   user-agent: "claude-cli/2.1.274 (external, cli)"
 #   package-version: "0.112.1"
 #   runtime-version: "v26.3.0"
 #   os: "MacOS"

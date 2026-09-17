@@ -26,7 +26,7 @@ func TestClaudeCredentialDeviceProfile_HeaderAndBillingVersionAgree(t *testing.T
 		Provider: "claude",
 		Metadata: map[string]any{"access_token": token},
 		Attributes: map[string]string{
-			cliproxyauth.AttributeClaudeDeviceUserAgent:      "claude-cli/2.1.258 (external, cli)",
+			cliproxyauth.AttributeClaudeDeviceUserAgent:      "claude-cli/2.1.274 (external, cli)",
 			cliproxyauth.AttributeClaudeDevicePackageVersion: "0.112.1",
 			cliproxyauth.AttributeClaudeDeviceRuntimeVersion: "v26.3.0",
 			cliproxyauth.AttributeClaudeDeviceOS:             "Linux",
@@ -40,7 +40,7 @@ func TestClaudeCredentialDeviceProfile_HeaderAndBillingVersionAgree(t *testing.T
 		t.Fatalf("applyCloaking = (applied=%t, err=%v)", applied, errCloak)
 	}
 	billing := gjson.GetBytes(cloaked, "system.0.text").String()
-	if !strings.Contains(billing, "cc_version=2.1.258.") {
+	if !strings.Contains(billing, "cc_version=2.1.274.") {
 		t.Fatalf("billing block cc_version does not follow the credential user-agent: %q", billing)
 	}
 
@@ -51,7 +51,7 @@ func TestClaudeCredentialDeviceProfile_HeaderAndBillingVersionAgree(t *testing.T
 	if errHeaders := applyClaudeHeaders(req, auth, token, false, nil, cloaked, cfg, http.Header{}, false); errHeaders != nil {
 		t.Fatalf("applyClaudeHeaders error = %v", errHeaders)
 	}
-	if got := req.Header.Get("User-Agent"); got != "claude-cli/2.1.258 (external, cli)" {
+	if got := req.Header.Get("User-Agent"); got != "claude-cli/2.1.274 (external, cli)" {
 		t.Fatalf("User-Agent = %q, want credential override", got)
 	}
 	if got := req.Header.Get("X-Stainless-Package-Version"); got != "0.112.1" {

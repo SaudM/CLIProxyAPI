@@ -13,11 +13,11 @@ func TestClaudeDeviceProfileValuesValidate(t *testing.T) {
 	}{
 		{name: "empty inherits", profile: ClaudeDeviceProfileValues{}},
 		{name: "platform only", profile: ClaudeDeviceProfileValues{OS: "Linux", Arch: "x64"}},
-		{name: "measured tuple", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.258 (external, cli)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}},
-		{name: "partial tuple", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.258 (external, cli)"}, wantErr: "set together"},
+		{name: "measured tuple", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.274 (external, cli)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}},
+		{name: "partial tuple", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.274 (external, cli)"}, wantErr: "set together"},
 		{name: "unmeasured version", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.240 (external, cli)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}, wantErr: "not a measured"},
-		{name: "mismatched package", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.258 (external, cli)", PackageVersion: "0.95.0", RuntimeVersion: "v26.3.0"}, wantErr: "ships package-version"},
-		{name: "wrong ua shape", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.258 (external, sdk-ts)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}, wantErr: "must look like"},
+		{name: "mismatched package", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.274 (external, cli)", PackageVersion: "0.95.0", RuntimeVersion: "v26.3.0"}, wantErr: "ships package-version"},
+		{name: "wrong ua shape", profile: ClaudeDeviceProfileValues{UserAgent: "claude-cli/2.1.274 (external, sdk-ts)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}, wantErr: "must look like"},
 		{name: "bad os", profile: ClaudeDeviceProfileValues{OS: "macos"}, wantErr: "Stainless platform"},
 		{name: "bad arch", profile: ClaudeDeviceProfileValues{Arch: "amd64"}, wantErr: "Stainless architecture"},
 	}
@@ -40,7 +40,7 @@ func TestClaudeDeviceProfileValuesValidate(t *testing.T) {
 func TestClaudeDeviceProfileValuesFromMetadata(t *testing.T) {
 	profile, err := ClaudeDeviceProfileValuesFromMetadata(map[string]any{
 		"device_profile": map[string]any{
-			"user-agent":      " claude-cli/2.1.258 (external, cli) ",
+			"user-agent":      " claude-cli/2.1.274 (external, cli) ",
 			"package_version": "0.112.1",
 			"runtime-version": "v26.3.0",
 			"os":              "Linux",
@@ -49,7 +49,7 @@ func TestClaudeDeviceProfileValuesFromMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromMetadata error = %v", err)
 	}
-	if profile.UserAgent != "claude-cli/2.1.258 (external, cli)" || profile.PackageVersion != "0.112.1" || profile.RuntimeVersion != "v26.3.0" || profile.OS != "Linux" || profile.Arch != "" {
+	if profile.UserAgent != "claude-cli/2.1.274 (external, cli)" || profile.PackageVersion != "0.112.1" || profile.RuntimeVersion != "v26.3.0" || profile.OS != "Linux" || profile.Arch != "" {
 		t.Fatalf("profile = %+v", profile)
 	}
 	if got, errAbsent := ClaudeDeviceProfileValuesFromMetadata(map[string]any{}); errAbsent != nil || !got.IsZero() {
@@ -68,7 +68,7 @@ func TestParseConfigBytesClaudeDeviceProfile(t *testing.T) {
 claude-api-key:
   - api-key: "k1"
     device-profile:
-      user-agent: "claude-cli/2.1.258 (external, cli)"
+      user-agent: "claude-cli/2.1.274 (external, cli)"
       package-version: "0.112.1"
       runtime-version: "v26.3.0"
       os: "Linux"

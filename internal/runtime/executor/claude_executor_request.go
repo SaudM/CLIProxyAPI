@@ -1116,7 +1116,7 @@ func applyClaudeHeadersWithNativeProfile(
 	identityHeader("Anthropic-Version", "2023-06-01")
 	identityHeader("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	identityHeader("X-App", "cli")
-	// Values below match Claude Code 2.1.258 / @anthropic-ai/sdk 0.112.1.
+	// Values below match Claude Code 2.1.273/2.1.274 / @anthropic-ai/sdk 0.112.1 (captured 2026-09-18).
 	identityHeader("X-Stainless-Retry-Count", "0")
 	identityHeader("X-Stainless-Runtime", "node")
 	identityHeader("X-Stainless-Lang", "js")

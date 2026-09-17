@@ -138,29 +138,32 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return resp, nil
 }
 
-// claudeCodeSessionCacheCapacity bounds the per-transport TLS session cache for
-// the Anthropic inference plane.
-const claudeCodeSessionCacheCapacity = 32
-
 // newClaudeCodeTLSConfig builds the uTLS config for one inference-plane dial.
 //
-// OmitEmptyPsk keeps the pre_shared_key extension silent until a session is
-// cached, so an unresumed ClientHello stays byte-identical to the captured
-// native handshake. PreferSkipResumptionOnNilExtension turns uTLS's HelloCustom
-// "resume without the matching extension" panic into a skipped resumption.
-func newClaudeCodeTLSConfig(host string, sessionCache tls.ClientSessionCache) *tls.Config {
+// The native Claude Code client (Bun / BoringSSL) performs a full handshake on
+// every connection: consecutive captures never carry pre_shared_key even after
+// the server issued tickets. No client session cache is attached, so this side
+// never resumes either; OmitEmptyPsk keeps the extension silent and
+// PreferSkipResumptionOnNilExtension is defense in depth against a HelloCustom
+// resumption panic should a cache ever be wired in again.
+func newClaudeCodeTLSConfig(host string) *tls.Config {
 	return &tls.Config{
 		ServerName:                         host,
-		ClientSessionCache:                 sessionCache,
+		SessionTicketsDisabled:             true,
 		OmitEmptyPsk:                       true,
 		PreferSkipResumptionOnNilExtension: true,
 	}
 }
 
-// claudeCodeTLSClientHelloSpec reproduces the deterministic Node/OpenSSL
-// ClientHello emitted by Claude Code 2.1.220 on macOS arm64. Keep this spec in
-// sync with a fresh native capture whenever the advertised Claude Code version
-// changes.
+// claudeCodeTLSClientHelloSpec reproduces the deterministic ClientHello emitted by
+// the native Claude Code 2.1.274 binary (Bun 1.4.3 / BoringSSL) for its fetch
+// transport, captured 2026-09-18 on macOS arm64 against a local TLS-terminating
+// listener and cross-checked against a tcpdump of the same client talking to a
+// remote host. Compared with the 2.1.220 Node/OpenSSL capture the only wire
+// differences are the X25519MLKEM768 hybrid group (first in supported_groups and
+// key_share, which also lifts the hello past the BoringSSL padding range) and the
+// absence of TLS session resumption. Keep this spec in sync with a fresh native
+// capture whenever the advertised Claude Code version changes.
 func claudeCodeTLSClientHelloSpec() *tls.ClientHelloSpec {
 	return &tls.ClientHelloSpec{
 		CipherSuites: []uint16{
@@ -187,7 +190,7 @@ func claudeCodeTLSClientHelloSpec() *tls.ClientHelloSpec {
 			&tls.SNIExtension{},
 			&tls.ExtendedMasterSecretExtension{},
 			&tls.RenegotiationInfoExtension{Renegotiation: tls.RenegotiateOnceAsClient},
-			&tls.SupportedCurvesExtension{Curves: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384}},
+			&tls.SupportedCurvesExtension{Curves: []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256, tls.CurveP384}},
 			&tls.SupportedPointsExtension{SupportedPoints: []byte{0}},
 			&tls.SessionTicketExtension{},
 			&tls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
@@ -204,12 +207,16 @@ func claudeCodeTLSClientHelloSpec() *tls.ClientHelloSpec {
 				tls.PKCS1WithSHA1,
 			}},
 			&tls.SCTExtension{},
-			&tls.KeyShareExtension{KeyShares: []tls.KeyShare{{Group: tls.X25519}}},
+			&tls.KeyShareExtension{KeyShares: []tls.KeyShare{{Group: tls.X25519MLKEM768}, {Group: tls.X25519}}},
 			&tls.PSKKeyExchangeModesExtension{Modes: []uint8{tls.PskModeDHE}},
 			&tls.SupportedVersionsExtension{Versions: []uint16{tls.VersionTLS13, tls.VersionTLS12}},
+			// BoringSSL pads only a 256-511 byte hello; with the MLKEM share the
+			// native hello is ~1.5 KB, so this extension stays silent as it does there.
 			&tls.UtlsPaddingExtension{GetPaddingLen: tls.BoringPaddingStyle},
 			// pre_shared_key MUST be the final extension (RFC 8446 4.2.11), after
-			// padding. It contributes zero bytes until a cached session exists.
+			// padding. The native client never resumes sessions and no session cache
+			// is attached, so it contributes zero bytes; it stays listed only so a
+			// future resumption-enabled spec cannot violate the ordering rule.
 			&tls.UtlsPreSharedKeyExtension{},
 		},
 	}
@@ -217,8 +224,7 @@ func claudeCodeTLSClientHelloSpec() *tls.ClientHelloSpec {
 
 // claudeCodeRoundTripperCacheCapacity bounds how many Anthropic inference-plane
 // transports stay alive. One entry exists per (credential, proxy) pair, so it is
-// sized for large multi-account deployments; an idle entry costs one Transport and
-// at most claudeCodeSessionCacheCapacity cached sessions.
+// sized for large multi-account deployments; an idle entry costs one Transport.
 const claudeCodeRoundTripperCacheCapacity = 8192
 
 // claudeCodeRoundTripperKey scopes a transport, and therefore its TCP pool and TLS
@@ -312,6 +318,9 @@ func claudeCodeRequestHeaderOrder(_, requestTarget string) []string {
 	if strings.HasPrefix(requestTarget, "/v1/messages/count_tokens") {
 		return claudeCodeCountTokensHeaderOrder
 	}
+	if requestTarget == claudeCodeHelloPath {
+		return claudeCodeHelloHeaderOrder
+	}
 	return claudeCodeMessagesHeaderOrder
 }
 
@@ -323,9 +332,8 @@ func cachedClaudeCodeRoundTripper(proxyURL string, auth *cliproxyauth.Auth) http
 }
 
 func newClaudeCodeRoundTripper(proxyURL string) http.RoundTripper {
-	// The session cache is owned by this round tripper, which is keyed by
-	// (credential, proxy), so TLS resumption never crosses either boundary.
-	sessionCache := tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity)
+	// Transports stay keyed by (credential, proxy) so TCP pools never cross either
+	// boundary; TLS sessions are not resumed at all (see newClaudeCodeTLSConfig).
 	var dialer proxy.Dialer = proxy.Direct
 	if proxyURL != "" {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(proxyURL)
@@ -359,7 +367,7 @@ func newClaudeCodeRoundTripper(proxyURL string) http.RoundTripper {
 				}
 				return nil, fmt.Errorf("claude tls: split upstream address: %w", errSplit)
 			}
-			tlsConn := tls.UClient(conn, newClaudeCodeTLSConfig(host, sessionCache), tls.HelloCustom)
+			tlsConn := tls.UClient(conn, newClaudeCodeTLSConfig(host), tls.HelloCustom)
 			if errPreset := tlsConn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
 				if errClose := tlsConn.Close(); errClose != nil {
 					log.Debugf("claude tls: close connection after preset failure: %v", errClose)

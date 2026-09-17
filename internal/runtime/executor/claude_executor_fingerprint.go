@@ -91,7 +91,7 @@ func (e *ClaudeExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string
 	}
 
 	if strings.Contains(strings.ToLower(baseURL), "api.anthropic.com") || strings.TrimSpace(baseURL) == "" {
-		fingerprintSetTransport(report, "utls-node", "1.1")
+		fingerprintSetTransport(report, "utls-claude-code-bun", "1.1")
 	} else {
 		fingerprintSetTransport(report, "go", "auto")
 	}

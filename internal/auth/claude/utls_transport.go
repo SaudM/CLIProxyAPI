@@ -9,7 +9,6 @@ import (
 	"time"
 
 	tls "github.com/refraction-networking/utls"
-	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/httpwire"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
@@ -61,62 +60,30 @@ func claudeOAuthRequestHeaderOrder(method, requestTarget string) []string {
 	return claudeOAuthRefreshHeaderOrder
 }
 
-// claudeOAuthSessionCacheCapacity bounds one proxy's TLS session cache. The
-// OAuth control plane only talks to platform.claude.com and api.anthropic.com,
-// so a small cache covers every reachable server.
-const (
-	claudeOAuthSessionCacheCapacity = 8
-	// claudeOAuthProxySessionCacheCapacity bounds (credential, proxy) session caches;
-	// an idle entry holds at most claudeOAuthSessionCacheCapacity sessions.
-	claudeOAuthProxySessionCacheCapacity = 8192
-)
-
-// claudeOAuthSessionCaches keys one session cache per (credential, proxy).
-//
-// ClaudeAuth is constructed per operation (every refresh and every executor
-// profile check builds a new one), so a cache owned by the round tripper would
-// always start empty and never resume. Keying on the credential and proxy lets
-// a credential resume its own sessions while a TLS session ticket issued during
-// one account's refresh can never resume a connection carrying another account.
-// The inference plane isolates transports the same way.
-
-type claudeOAuthSessionCacheKey struct {
-	proxyURL   string
-	credential string
-}
-
-var claudeOAuthSessionCaches = internalcache.NewBoundedLRU[claudeOAuthSessionCacheKey, tls.ClientSessionCache](
-	claudeOAuthProxySessionCacheCapacity,
-	nil,
-)
-
-func claudeOAuthSessionCache(proxyURL, credential string) tls.ClientSessionCache {
-	key := claudeOAuthSessionCacheKey{proxyURL: proxyURL, credential: strings.TrimSpace(credential)}
-	return claudeOAuthSessionCaches.GetOrAdd(key, func() tls.ClientSessionCache {
-		return tls.NewLRUClientSessionCache(claudeOAuthSessionCacheCapacity)
-	})
-}
-
 // newClaudeOAuthTLSConfig builds the uTLS config for one control-plane dial.
 //
-// OmitEmptyPsk keeps the pre_shared_key extension silent until a session is
-// actually cached, so the first ClientHello is byte-identical to the captured
-// native handshake. PreferSkipResumptionOnNilExtension is defense in depth: for
-// HelloCustom specs uTLS panics when it wants to resume but the spec lacks the
-// matching extension, and this degrades that into a skipped resumption.
-func newClaudeOAuthTLSConfig(host string, sessionCache tls.ClientSessionCache) *tls.Config {
+// The native client (Bun / BoringSSL) performs a full handshake on every
+// connection and never presents pre_shared_key, so no session cache is attached
+// and tickets are disabled. OmitEmptyPsk keeps the extension silent;
+// PreferSkipResumptionOnNilExtension is defense in depth against a HelloCustom
+// resumption panic should a cache ever be wired in again.
+func newClaudeOAuthTLSConfig(host string) *tls.Config {
 	return &tls.Config{
 		ServerName:                         host,
-		ClientSessionCache:                 sessionCache,
+		SessionTicketsDisabled:             true,
 		OmitEmptyPsk:                       true,
 		PreferSkipResumptionOnNilExtension: true,
 	}
 }
 
-// claudeOAuthTLSClientHelloSpec reproduces the compact Node/OpenSSL profile
-// Claude Code 2.1.220 uses for Axios OAuth control-plane requests. Unlike the
-// inference profile, it advertises no ALPN extension and therefore uses
-// HTTP/1.1 without negotiating a protocol.
+// claudeOAuthTLSClientHelloSpec reproduces the ClientHello the native Claude Code
+// 2.1.274 binary (Bun 1.4.3 / BoringSSL) emits from its Axios / node:https path,
+// which carries the OAuth control-plane calls (platform.claude.com token refresh
+// and the api.anthropic.com profile and role lookups). It was captured 2026-09-18
+// from that client's direct api.anthropic.com connections. Unlike the fetch
+// profile used for inference it advertises no ALPN, status_request or SCT
+// extension and orders cipher suites the Node.js way (RSA before ECDSA, with
+// ECDHE-RSA-AES128-SHA256), so it negotiates HTTP/1.1 without a protocol.
 func claudeOAuthTLSClientHelloSpec() *tls.ClientHelloSpec {
 	return &tls.ClientHelloSpec{
 		TLSVersMin:         tls.VersionTLS12,
@@ -126,10 +93,11 @@ func claudeOAuthTLSClientHelloSpec() *tls.ClientHelloSpec {
 			tls.TLS_AES_128_GCM_SHA256,
 			tls.TLS_AES_256_GCM_SHA384,
 			tls.TLS_CHACHA20_POLY1305_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
@@ -145,7 +113,7 @@ func claudeOAuthTLSClientHelloSpec() *tls.ClientHelloSpec {
 			&tls.SNIExtension{},
 			&tls.ExtendedMasterSecretExtension{},
 			&tls.RenegotiationInfoExtension{Renegotiation: tls.RenegotiateOnceAsClient},
-			&tls.SupportedCurvesExtension{Curves: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384}},
+			&tls.SupportedCurvesExtension{Curves: []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256, tls.CurveP384}},
 			&tls.SupportedPointsExtension{SupportedPoints: []byte{0}},
 			&tls.SessionTicketExtension{},
 			&tls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []tls.SignatureScheme{
@@ -159,11 +127,12 @@ func claudeOAuthTLSClientHelloSpec() *tls.ClientHelloSpec {
 				tls.PKCS1WithSHA512,
 				tls.PKCS1WithSHA1,
 			}},
-			&tls.KeyShareExtension{KeyShares: []tls.KeyShare{{Group: tls.X25519}}},
+			&tls.KeyShareExtension{KeyShares: []tls.KeyShare{{Group: tls.X25519MLKEM768}, {Group: tls.X25519}}},
 			&tls.PSKKeyExchangeModesExtension{Modes: []uint8{tls.PskModeDHE}},
 			&tls.SupportedVersionsExtension{Versions: []uint16{tls.VersionTLS13, tls.VersionTLS12}},
-			// pre_shared_key MUST be the final extension (RFC 8446 4.2.11). It
-			// contributes zero bytes until a cached session exists.
+			// pre_shared_key MUST be the final extension (RFC 8446 4.2.11). The native
+			// client never resumes and no session cache is attached, so it contributes
+			// zero bytes; it stays listed only to keep the ordering rule explicit.
 			&tls.UtlsPreSharedKeyExtension{},
 		},
 	}
@@ -173,12 +142,8 @@ func claudeOAuthTLSClientHelloSpec() *tls.ClientHelloSpec {
 // profile while retaining net/http proxy, cancellation, response parsing and
 // connection lifecycle semantics.
 type utlsRoundTripper struct {
-	dialer proxy.Dialer
-	// sessionCache is shared by every transport built for the same proxy, so
-	// short-lived ClaudeAuth instances can still resume, while resumption never
-	// crosses proxy boundaries.
-	sessionCache tls.ClientSessionCache
-	transport    *http.Transport
+	dialer    proxy.Dialer
+	transport *http.Transport
 }
 
 func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
@@ -188,11 +153,12 @@ func newUtlsRoundTripper(cfg *config.SDKConfig) *utlsRoundTripper {
 // newUtlsRoundTripperForCredential builds the control-plane transport for one
 // credential. An empty credential scope is the anonymous login flow, which has
 // no account identity to protect yet.
-func newUtlsRoundTripperForCredential(cfg *config.SDKConfig, credential string) *utlsRoundTripper {
+// newUtlsRoundTripperForCredential builds the control-plane transport for one
+// credential. TLS sessions are never resumed, so the credential no longer scopes
+// any TLS state; the parameter names the account the dial serves for callers.
+func newUtlsRoundTripperForCredential(cfg *config.SDKConfig, _ string) *utlsRoundTripper {
 	var dialer proxy.Dialer = proxy.Direct
-	var proxyURL string
 	if cfg != nil {
-		proxyURL = cfg.ProxyURL
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(cfg.ProxyURL)
 		if errBuild != nil {
 			log.Errorf("failed to configure proxy dialer for %q: %v", proxyutil.Redact(cfg.ProxyURL), errBuild)
@@ -201,10 +167,7 @@ func newUtlsRoundTripperForCredential(cfg *config.SDKConfig, credential string) 
 		}
 	}
 
-	roundTripper := &utlsRoundTripper{
-		dialer:       dialer,
-		sessionCache: claudeOAuthSessionCache(proxyURL, credential),
-	}
+	roundTripper := &utlsRoundTripper{dialer: dialer}
 	roundTripper.transport = &http.Transport{
 		ForceAttemptHTTP2: false,
 		DialTLSContext:    roundTripper.dialTLSContext,
@@ -233,7 +196,7 @@ func (t *utlsRoundTripper) dialTLSContext(ctx context.Context, network, addr str
 		}
 		return nil, fmt.Errorf("claude oauth tls: split upstream address: %w", errSplit)
 	}
-	tlsConn := tls.UClient(conn, newClaudeOAuthTLSConfig(host, t.sessionCache), tls.HelloCustom)
+	tlsConn := tls.UClient(conn, newClaudeOAuthTLSConfig(host), tls.HelloCustom)
 	if errPreset := tlsConn.ApplyPreset(claudeOAuthTLSClientHelloSpec()); errPreset != nil {
 		if errClose := tlsConn.Close(); errClose != nil {
 			log.Debugf("claude oauth tls: close connection after preset failure: %v", errClose)

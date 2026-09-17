@@ -3,12 +3,16 @@ package auth
 import (
 	"context"
 	"errors"
+	"hash/fnv"
+	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxysession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
@@ -17,6 +21,7 @@ const (
 	// credentialLimitConcurrencyRetry is the poll interval reported when a credential
 	// is saturated on in-flight requests: slot release has no deterministic instant.
 	credentialLimitConcurrencyRetry = 250 * time.Millisecond
+	credentialLimitDayKeyLayout     = "2006-01-02"
 )
 
 // credentialLimits are the effective limits for one credential. Zero means unlimited.
@@ -24,10 +29,36 @@ type credentialLimits struct {
 	RPM           int
 	TPM           int
 	MaxConcurrent int
+	// RPD / TPD are per calendar day in Location.
+	RPD int
+	TPD int
+	// MaxSessions caps distinct downstream sessions seen within SessionWindow.
+	MaxSessions   int
+	SessionWindow time.Duration
+	// ActiveHours is a daily window in Location; ActiveHoursJitter shifts its edges per credential and day.
+	ActiveHours       internalconfig.ActiveHours
+	ActiveHoursJitter time.Duration
+	Location          *time.Location
+	// base* keep the configured values before jitter, for display only.
+	baseRPM, baseTPM, baseRPD, baseTPD int
 }
 
 func (l credentialLimits) enabled() bool {
-	return l.RPM > 0 || l.TPM > 0 || l.MaxConcurrent > 0
+	return l.RPM > 0 || l.TPM > 0 || l.MaxConcurrent > 0 || l.RPD > 0 || l.TPD > 0 || l.MaxSessions > 0 || !l.ActiveHours.IsZero()
+}
+
+func (l credentialLimits) location() *time.Location {
+	if l.Location != nil {
+		return l.Location
+	}
+	return time.Local
+}
+
+func (l credentialLimits) sessionWindow() time.Duration {
+	if l.SessionWindow <= 0 {
+		return internalconfig.DefaultCredentialSessionWindowMinutes * time.Minute
+	}
+	return l.SessionWindow
 }
 
 // limitWindow is a rolling 60 second window made of one-second buckets.
@@ -101,9 +132,46 @@ type credentialLimitEntry struct {
 	rpm      limitWindow
 	tpm      limitWindow
 	inFlight int
+	// Daily counters roll over at local midnight in loc; loc is remembered from the
+	// last admission so token usage recorded later lands in the right day.
+	loc         *time.Location
+	dayKey      string
+	dayRequests int64
+	dayTokens   int64
+	// sessions maps a downstream session key to the last instant it was admitted.
+	sessions map[string]time.Time
 }
 
-// credentialLimiter tracks per-credential request, token and in-flight counters.
+// rollDay resets the daily counters when the local calendar day changed.
+func (e *credentialLimitEntry) rollDay(now time.Time, loc *time.Location) {
+	if loc != nil {
+		e.loc = loc
+	}
+	if e.loc == nil {
+		e.loc = time.Local
+	}
+	if key := now.In(e.loc).Format(credentialLimitDayKeyLayout); key != e.dayKey {
+		e.dayKey = key
+		e.dayRequests = 0
+		e.dayTokens = 0
+	}
+}
+
+// pruneSessions forgets sessions idle for longer than window and returns the oldest live one.
+func (e *credentialLimitEntry) pruneSessions(now time.Time, window time.Duration) (oldest time.Time) {
+	for key, seen := range e.sessions {
+		if now.Sub(seen) >= window {
+			delete(e.sessions, key)
+			continue
+		}
+		if oldest.IsZero() || seen.Before(oldest) {
+			oldest = seen
+		}
+	}
+	return oldest
+}
+
+// credentialLimiter tracks per-credential request, token, session and in-flight counters.
 // It has its own lock and never calls back into the Manager.
 type credentialLimiter struct {
 	mu      sync.Mutex
@@ -139,29 +207,121 @@ func (l *credentialLimiter) entryLocked(authID string) *credentialLimitEntry {
 	return entry
 }
 
-// blockedUntilLocked evaluates limits without mutating state. A zero result means admissible.
-func (l *credentialLimiter) blockedUntilLocked(entry *credentialLimitEntry, limits credentialLimits, now time.Time) time.Time {
-	var blocked time.Time
-	nowSec := now.Unix()
-	if limits.MaxConcurrent > 0 && entry.inFlight >= limits.MaxConcurrent {
-		blocked = now.Add(credentialLimitConcurrencyRetry)
+// jitterFraction maps seed to a stable value in [-1, 1).
+func jitterFraction(seed string) float64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(seed))
+	unit := float64(h.Sum64()>>11) / float64(uint64(1)<<53)
+	return 2*unit - 1
+}
+
+// jitterOffset returns a stable duration in [-span, span) for seed.
+func jitterOffset(seed string, span time.Duration) time.Duration {
+	if span <= 0 {
+		return 0
 	}
-	if limits.RPM > 0 {
-		if next := entry.rpm.recoverAt(nowSec, int64(limits.RPM)); !next.IsZero() && next.After(blocked) {
-			blocked = next
+	return time.Duration(jitterFraction(seed) * float64(span))
+}
+
+// jitteredLimit scales base by a stable per-credential offset within ±percent, never below 1.
+func jitteredLimit(authID, name string, base, percent int) int {
+	if base <= 0 || percent <= 0 {
+		return base
+	}
+	scaled := int(math.Round(float64(base) * (1 + jitterFraction(authID+"|"+name)*float64(percent)/100)))
+	if scaled < 1 {
+		return 1
+	}
+	return scaled
+}
+
+// activeWindowFor returns the open/close instants of the window that starts on local day
+// `day` (midnight in the day's location), with the per-credential, per-day edge jitter.
+func activeWindowFor(authID string, hours internalconfig.ActiveHours, day time.Time, jitter time.Duration) (open, closeAt time.Time) {
+	open = day.Add(time.Duration(hours.Start) * time.Minute)
+	closeAt = day.Add(time.Duration(hours.End) * time.Minute)
+	if hours.Wraps() {
+		closeAt = closeAt.Add(24 * time.Hour)
+	}
+	if jitter > 0 {
+		key := day.Format(credentialLimitDayKeyLayout)
+		open = open.Add(jitterOffset(authID+"|open|"+key, jitter))
+		closeAt = closeAt.Add(jitterOffset(authID+"|close|"+key, jitter))
+	}
+	return open, closeAt
+}
+
+// activeHoursState reports whether the credential is inside its window at now and the
+// instant of the next edge (close when open, next open when closed).
+func activeHoursState(authID string, hours internalconfig.ActiveHours, loc *time.Location, jitter time.Duration, now time.Time) (bool, time.Time) {
+	if hours.IsZero() {
+		return true, time.Time{}
+	}
+	local := now.In(loc)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	// A window that wraps midnight may have opened yesterday.
+	for _, day := range []time.Time{today.AddDate(0, 0, -1), today} {
+		open, closeAt := activeWindowFor(authID, hours, day, jitter)
+		if !now.Before(open) && now.Before(closeAt) {
+			return true, closeAt
 		}
 	}
+	for _, day := range []time.Time{today, today.AddDate(0, 0, 1)} {
+		if open, _ := activeWindowFor(authID, hours, day, jitter); open.After(now) {
+			return false, open
+		}
+	}
+	return false, today.AddDate(0, 0, 2)
+}
+
+func nextLocalMidnight(now time.Time, loc *time.Location) time.Time {
+	local := now.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, loc)
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// blockedUntilLocked evaluates limits without admitting anything. A zero result means
+// admissible. It only rolls the day and prunes idle sessions, never counts.
+func (l *credentialLimiter) blockedUntilLocked(authID string, entry *credentialLimitEntry, limits credentialLimits, sessionKey string, now time.Time) time.Time {
+	var blocked time.Time
+	nowSec := now.Unix()
+	loc := limits.location()
+	if awake, next := activeHoursState(authID, limits.ActiveHours, loc, limits.ActiveHoursJitter, now); !awake {
+		blocked = laterOf(blocked, next)
+	}
+	if limits.MaxConcurrent > 0 && entry.inFlight >= limits.MaxConcurrent {
+		blocked = laterOf(blocked, now.Add(credentialLimitConcurrencyRetry))
+	}
+	if limits.RPM > 0 {
+		blocked = laterOf(blocked, entry.rpm.recoverAt(nowSec, int64(limits.RPM)))
+	}
 	if limits.TPM > 0 {
-		if next := entry.tpm.recoverAt(nowSec, int64(limits.TPM)); !next.IsZero() && next.After(blocked) {
-			blocked = next
+		blocked = laterOf(blocked, entry.tpm.recoverAt(nowSec, int64(limits.TPM)))
+	}
+	entry.rollDay(now, loc)
+	if (limits.RPD > 0 && entry.dayRequests >= int64(limits.RPD)) || (limits.TPD > 0 && entry.dayTokens >= int64(limits.TPD)) {
+		blocked = laterOf(blocked, nextLocalMidnight(now, loc))
+	}
+	if limits.MaxSessions > 0 && sessionKey != "" {
+		oldest := entry.pruneSessions(now, limits.sessionWindow())
+		// A session already served by this credential is never turned away by the cap.
+		if _, known := entry.sessions[sessionKey]; !known && len(entry.sessions) >= limits.MaxSessions {
+			blocked = laterOf(blocked, oldest.Add(limits.sessionWindow()))
 		}
 	}
 	return blocked
 }
 
 // tryAcquire admits one request when every limit allows it. On refusal nothing is
-// mutated and blockedUntil reports the earliest instant worth retrying.
-func (l *credentialLimiter) tryAcquire(authID string, limits credentialLimits) (*credentialLease, time.Time, bool) {
+// counted and blockedUntil reports the earliest instant worth retrying. sessionKey
+// identifies the downstream session; empty means the request has none.
+func (l *credentialLimiter) tryAcquire(authID, sessionKey string, limits credentialLimits) (*credentialLease, time.Time, bool) {
 	if l == nil || !limits.enabled() {
 		return nil, time.Time{}, true
 	}
@@ -169,17 +329,24 @@ func (l *credentialLimiter) tryAcquire(authID string, limits credentialLimits) (
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	entry := l.entryLocked(authID)
-	if blocked := l.blockedUntilLocked(entry, limits, now); !blocked.IsZero() {
+	if blocked := l.blockedUntilLocked(authID, entry, limits, sessionKey, now); !blocked.IsZero() {
 		return nil, blocked, false
 	}
 	entry.inFlight++
 	entry.rpm.add(now.Unix(), 1)
+	entry.dayRequests++
+	if sessionKey != "" {
+		if entry.sessions == nil {
+			entry.sessions = make(map[string]time.Time)
+		}
+		entry.sessions[sessionKey] = now
+	}
 	return &credentialLease{limiter: l, authID: authID}, time.Time{}, true
 }
 
 // nextAvailable reports how long until the credential would next admit a request,
 // measured on the limiter's own clock. Zero means it would admit one now.
-func (l *credentialLimiter) nextAvailable(authID string, limits credentialLimits) time.Duration {
+func (l *credentialLimiter) nextAvailable(authID, sessionKey string, limits credentialLimits) time.Duration {
 	if l == nil || !limits.enabled() {
 		return 0
 	}
@@ -188,9 +355,10 @@ func (l *credentialLimiter) nextAvailable(authID string, limits credentialLimits
 	defer l.mu.Unlock()
 	entry := l.entries[authID]
 	if entry == nil {
-		return 0
+		// Active hours apply before the credential has any state; evaluate on a scratch entry.
+		entry = &credentialLimitEntry{}
 	}
-	blocked := l.blockedUntilLocked(entry, limits, now)
+	blocked := l.blockedUntilLocked(authID, entry, limits, sessionKey, now)
 	if blocked.IsZero() {
 		return 0
 	}
@@ -219,7 +387,10 @@ func (l *credentialLimiter) recordTokens(authID string, tokens int64) {
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.entryLocked(authID).tpm.add(now.Unix(), tokens)
+	entry := l.entryLocked(authID)
+	entry.tpm.add(now.Unix(), tokens)
+	entry.rollDay(now, nil)
+	entry.dayTokens += tokens
 }
 
 func (l *credentialLimiter) remove(authID string) {
@@ -236,30 +407,68 @@ type CredentialLimitStatus struct {
 	RPM           int
 	TPM           int
 	MaxConcurrent int
-	RPMUsed       int64
-	TPMUsed       int64
-	InFlight      int
+	RPD           int
+	TPD           int
+	MaxSessions   int
+	// *Base are the configured values before per-credential jitter.
+	RPMBase        int
+	TPMBase        int
+	RPDBase        int
+	TPDBase        int
+	RPMUsed        int64
+	TPMUsed        int64
+	RPDUsed        int64
+	TPDUsed        int64
+	InFlight       int
+	ActiveSessions int
+	SessionWindow  time.Duration
 	// RPMResetsIn / TPMResetsIn report when the oldest window bucket expires; zero when idle.
 	RPMResetsIn time.Duration
 	TPMResetsIn time.Duration
+	// DayResetsIn is the time until the next local midnight; zero when no daily limit is set.
+	DayResetsIn time.Duration
+	ActiveHours string
+	Timezone    string
+	// Awake is false while the active-hours window is closed. AwakeChangesAt is the next
+	// window edge (close when awake, open when asleep); zero when no window is set.
+	Awake          bool
+	AwakeChangesAt time.Time
 }
 
 func (l *credentialLimiter) snapshot(authID string, limits credentialLimits) CredentialLimitStatus {
-	status := CredentialLimitStatus{RPM: limits.RPM, TPM: limits.TPM, MaxConcurrent: limits.MaxConcurrent}
+	status := CredentialLimitStatus{
+		RPM: limits.RPM, TPM: limits.TPM, MaxConcurrent: limits.MaxConcurrent,
+		RPD: limits.RPD, TPD: limits.TPD, MaxSessions: limits.MaxSessions,
+		RPMBase: limits.baseRPM, TPMBase: limits.baseTPM, RPDBase: limits.baseRPD, TPDBase: limits.baseTPD,
+		SessionWindow: limits.sessionWindow(),
+		ActiveHours:   limits.ActiveHours.String(),
+		Timezone:      limits.location().String(),
+		Awake:         true,
+	}
 	if l == nil {
 		return status
 	}
 	now := l.now()
 	nowSec := now.Unix()
+	loc := limits.location()
+	status.Awake, status.AwakeChangesAt = activeHoursState(authID, limits.ActiveHours, loc, limits.ActiveHoursJitter, now)
+	if limits.RPD > 0 || limits.TPD > 0 {
+		status.DayResetsIn = nextLocalMidnight(now, loc).Sub(now)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	entry := l.entries[authID]
 	if entry == nil {
 		return status
 	}
+	entry.rollDay(now, loc)
 	status.RPMUsed = entry.rpm.sum(nowSec)
 	status.TPMUsed = entry.tpm.sum(nowSec)
+	status.RPDUsed = entry.dayRequests
+	status.TPDUsed = entry.dayTokens
 	status.InFlight = entry.inFlight
+	entry.pruneSessions(now, limits.sessionWindow())
+	status.ActiveSessions = len(entry.sessions)
 	if oldest, ok := entry.rpm.oldestLive(nowSec); ok {
 		status.RPMResetsIn = time.Unix(oldest+credentialLimitWindowSeconds, 0).Sub(now)
 	}
@@ -269,13 +478,17 @@ func (l *credentialLimiter) snapshot(authID string, limits credentialLimits) Cre
 	return status
 }
 
-// SetCredentialLimits publishes the global credential-limits defaults.
-func (m *Manager) SetCredentialLimits(cfg internalconfig.CredentialLimits) {
+// SetCredentialLimits publishes the global credential-limits defaults. fallbackTimezone
+// is the clock used for daily budgets and active hours when a credential has none of
+// its own (normally claude-header-defaults.timezone); empty means the server's local time.
+func (m *Manager) SetCredentialLimits(cfg internalconfig.CredentialLimits, fallbackTimezone string) {
 	if m == nil {
 		return
 	}
 	cfg.Normalize()
 	m.credentialLimits.Store(&cfg)
+	fallbackTimezone = strings.TrimSpace(fallbackTimezone)
+	m.credentialTimezone.Store(&fallbackTimezone)
 }
 
 func (m *Manager) credentialLimitsConfig() internalconfig.CredentialLimits {
@@ -288,34 +501,126 @@ func (m *Manager) credentialLimitsConfig() internalconfig.CredentialLimits {
 	return internalconfig.CredentialLimits{}
 }
 
-// effectiveCredentialLimits resolves per-auth overrides, then provider defaults, then globals.
+var credentialLocationCache sync.Map // timezone name -> *time.Location
+
+func loadCredentialLocation(name string) (*time.Location, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, false
+	}
+	if cached, ok := credentialLocationCache.Load(name); ok {
+		return cached.(*time.Location), true
+	}
+	loc, errLoad := time.LoadLocation(name)
+	if errLoad != nil {
+		return nil, false
+	}
+	credentialLocationCache.Store(name, loc)
+	return loc, true
+}
+
+// credentialLocation resolves the clock a credential lives in: its own timezone
+// (pool or credential), then the configured fallback, then the server's local time.
+func (m *Manager) credentialLocation(auth *Auth) *time.Location {
+	if auth != nil {
+		if auth.Attributes != nil {
+			if loc, ok := loadCredentialLocation(auth.Attributes[AttributeTimezone]); ok {
+				return loc
+			}
+		}
+		if value, ok := auth.Metadata[AttributeTimezone].(string); ok {
+			if loc, ok := loadCredentialLocation(value); ok {
+				return loc
+			}
+		}
+	}
+	if m != nil {
+		if fallback := m.credentialTimezone.Load(); fallback != nil {
+			if loc, ok := loadCredentialLocation(*fallback); ok {
+				return loc
+			}
+		}
+	}
+	return time.Local
+}
+
+// effectiveCredentialLimits resolves per-auth overrides, then provider defaults, then
+// globals, and applies the per-credential jitter.
 func (m *Manager) effectiveCredentialLimits(auth *Auth) credentialLimits {
 	if m == nil || auth == nil {
 		return credentialLimits{}
 	}
-	rpm, tpm, maxConcurrent := m.credentialLimitsConfig().Resolve(strings.ToLower(strings.TrimSpace(auth.Provider)), executorKeyFromAuth(auth))
+	cfg := m.credentialLimitsConfig()
+	resolved := cfg.Resolve(strings.ToLower(strings.TrimSpace(auth.Provider)), executorKeyFromAuth(auth))
 	if value, ok := auth.RPMOverride(); ok {
-		rpm = value
+		resolved.RPM = value
 	}
 	if value, ok := auth.TPMOverride(); ok {
-		tpm = value
+		resolved.TPM = value
 	}
 	if value, ok := auth.MaxConcurrentOverride(); ok {
-		maxConcurrent = value
+		resolved.MaxConcurrent = value
 	}
-	return credentialLimits{RPM: rpm, TPM: tpm, MaxConcurrent: maxConcurrent}
+	if value, ok := auth.RPDOverride(); ok {
+		resolved.RPD = value
+	}
+	if value, ok := auth.TPDOverride(); ok {
+		resolved.TPD = value
+	}
+	if value, ok := auth.MaxSessionsOverride(); ok {
+		resolved.MaxSessions = value
+	}
+	if value, ok := auth.ActiveHoursOverride(); ok {
+		resolved.ActiveHours = value
+	}
+	limits := credentialLimits{
+		RPM:           jitteredLimit(auth.ID, "rpm", resolved.RPM, cfg.LimitJitterPercent),
+		TPM:           jitteredLimit(auth.ID, "tpm", resolved.TPM, cfg.LimitJitterPercent),
+		MaxConcurrent: resolved.MaxConcurrent,
+		RPD:           jitteredLimit(auth.ID, "rpd", resolved.RPD, cfg.LimitJitterPercent),
+		TPD:           jitteredLimit(auth.ID, "tpd", resolved.TPD, cfg.LimitJitterPercent),
+		MaxSessions:   resolved.MaxSessions,
+		SessionWindow: cfg.SessionWindow(),
+		Location:      m.credentialLocation(auth),
+		baseRPM:       resolved.RPM,
+		baseTPM:       resolved.TPM,
+		baseRPD:       resolved.RPD,
+		baseTPD:       resolved.TPD,
+	}
+	// Windows are validated on config load and on management writes; an unparsable
+	// value that slipped into an auth file by hand means "always on".
+	limits.ActiveHours, _ = internalconfig.ParseActiveHours(resolved.ActiveHours)
+	if !limits.ActiveHours.IsZero() {
+		limits.ActiveHoursJitter = time.Duration(cfg.ActiveHoursJitterMinutes) * time.Minute
+	}
+	return limits
 }
 
 // acquireCredentialLease admits the auth under its effective limits. A nil lease with
 // ok=true means no limit applies to this credential.
-func (m *Manager) acquireCredentialLease(auth *Auth) (*credentialLease, time.Time, bool) {
+func (m *Manager) acquireCredentialLease(auth *Auth, sessionKey string) (*credentialLease, time.Time, bool) {
 	if m == nil || auth == nil {
 		return nil, time.Time{}, true
 	}
-	return m.limiter.tryAcquire(auth.ID, m.effectiveCredentialLimits(auth))
+	return m.limiter.tryAcquire(auth.ID, sessionKey, m.effectiveCredentialLimits(auth))
 }
 
-// RecordCredentialTokens adds consumed tokens to the auth's rolling TPM window.
+// credentialSessionKey identifies the downstream session a request belongs to, for the
+// per-credential session cap. Only explicit client session identifiers count; subagents
+// collapse onto their root session, and requests without an identifier are not sessions.
+func credentialSessionKey(opts cliproxyexecutor.Options, req cliproxyexecutor.Request) string {
+	info, ok := cliproxysession.ExtractSessionInfo(opts.Headers, req.Payload, opts.Metadata)
+	if !ok || info.ClientType == "lcp" {
+		return ""
+	}
+	key := strings.TrimSpace(info.SessionID)
+	if idx := strings.Index(key, ":agent:"); idx >= 0 {
+		key = key[:idx]
+	}
+	return key
+}
+
+// RecordCredentialTokens adds consumed tokens to the auth's rolling TPM window and daily budget.
 func (m *Manager) RecordCredentialTokens(authID string, tokens int64) {
 	if m == nil {
 		return

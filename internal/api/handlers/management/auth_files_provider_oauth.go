@@ -56,8 +56,23 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 		return
 	}
 
+	// An optional proxy-pool label makes the login exchange, the profile lookup and every
+	// later request for this account leave through the same egress. The pin is stored in
+	// the auth file so the pool assignment honours it after reloads.
+	proxyLabel := strings.TrimSpace(c.Query("proxy_label"))
+	loginProxyURL := ""
+	if proxyLabel != "" {
+		entry, found := h.proxyPoolEntryByLabel(proxyLabel)
+		if !found {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("proxy_label %q does not match any proxy-pool entry", proxyLabel)})
+			return
+		}
+		proxyLabel = strings.TrimSpace(entry.Label)
+		loginProxyURL = entry.URL
+	}
+
 	// Initialize Claude auth service
-	anthropicAuth := claude.NewClaudeAuth(h.cfg)
+	anthropicAuth := claude.NewClaudeAuthWithProxyURL(h.cfg, loginProxyURL)
 
 	// Generate authorization URL (then override redirect_uri to reuse server port)
 	authURL, state, err := anthropicAuth.GenerateAuthURL(state, pkceCodes)
@@ -165,6 +180,9 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 		}
 		if len(tokenStorage.DeviceIDs) > 0 {
 			metadata[claude.ClaudeDeviceIDsMetadataKey] = append([]string(nil), tokenStorage.DeviceIDs...)
+		}
+		if proxyLabel != "" {
+			metadata["proxy_pool_label"] = proxyLabel
 		}
 		fileName := claude.CredentialFileName(tokenStorage.Email, tokenStorage.OrganizationUUID, tokenStorage.AccountUUID)
 		record := &coreauth.Auth{

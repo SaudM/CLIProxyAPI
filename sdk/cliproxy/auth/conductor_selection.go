@@ -1171,7 +1171,7 @@ func (m *Manager) closestCooldownWaitWithAttempted(providers []string, model str
 		}
 		// A credential blocked only by a local rpm/tpm/concurrency limit recovers at a known
 		// instant; use the later of the cooldown and limiter recovery so the round waits for it.
-		if limitWait := m.limiter.nextAvailable(auth.ID, m.effectiveCredentialLimits(auth)); limitWait > 0 {
+		if limitWait := m.limiter.nextAvailable(auth.ID, "", m.effectiveCredentialLimits(auth)); limitWait > 0 {
 			if limitNext := now.Add(limitWait); limitNext.After(next) {
 				next = limitNext
 			}

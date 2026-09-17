@@ -127,6 +127,18 @@ func addCredentialLimitsToMetadata(limits config.CredentialLimitValues, metadata
 	if limits.MaxConcurrent != nil && *limits.MaxConcurrent >= 0 {
 		metadata["max_concurrent"] = *limits.MaxConcurrent
 	}
+	if limits.RPD != nil && *limits.RPD >= 0 {
+		metadata["rpd"] = *limits.RPD
+	}
+	if limits.TPD != nil && *limits.TPD >= 0 {
+		metadata["tpd"] = *limits.TPD
+	}
+	if limits.MaxSessions != nil && *limits.MaxSessions >= 0 {
+		metadata["max_sessions"] = *limits.MaxSessions
+	}
+	if limits.ActiveHours != nil {
+		metadata["active_hours"] = strings.TrimSpace(*limits.ActiveHours)
+	}
 }
 
 // addRequestScopedErrorsToMetadata copies per-credential request-scoped error rules into metadata.

@@ -21,7 +21,12 @@ func applyProxyPool(auth *coreauth.Auth, cfg *config.Config) {
 	if strings.TrimSpace(auth.ProxyURL) != "" {
 		return
 	}
-	entry, ok := pickProxyPoolEntry(cfg.ProxyPool, poolIdentity(auth))
+	// A credential pinned to a labelled entry (set at OAuth login, or edited later) uses
+	// that entry; a pin whose label no longer exists falls back to the stable hash.
+	entry, ok := pinnedProxyPoolEntry(cfg.ProxyPool, auth)
+	if !ok {
+		entry, ok = pickProxyPoolEntry(cfg.ProxyPool, poolIdentity(auth))
+	}
 	if !ok {
 		return
 	}
@@ -37,6 +42,21 @@ func applyProxyPool(auth *coreauth.Auth, cfg *config.Config) {
 	if entry.Timezone != "" && !credentialHasTimezone(auth) {
 		auth.Attributes[coreauth.AttributeTimezone] = entry.Timezone
 	}
+}
+
+// pinnedProxyPoolEntry returns the pool entry whose label matches the credential's
+// proxy_pool_label metadata, if any.
+func pinnedProxyPoolEntry(pool []config.ProxyPoolEntry, auth *coreauth.Auth) (config.ProxyPoolEntry, bool) {
+	label := auth.ProxyPoolLabel()
+	if label == "" {
+		return config.ProxyPoolEntry{}, false
+	}
+	for _, entry := range pool {
+		if strings.EqualFold(strings.TrimSpace(entry.Label), label) {
+			return entry, true
+		}
+	}
+	return config.ProxyPoolEntry{}, false
 }
 
 // applyCredentialPools applies every automatic per-credential assignment.

@@ -481,6 +481,21 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if maxConcurrent, ok := auth.MaxConcurrentOverride(); ok {
 		entry["max_concurrent"] = maxConcurrent
 	}
+	if rpd, ok := auth.RPDOverride(); ok {
+		entry["rpd"] = rpd
+	}
+	if tpd, ok := auth.TPDOverride(); ok {
+		entry["tpd"] = tpd
+	}
+	if maxSessions, ok := auth.MaxSessionsOverride(); ok {
+		entry["max_sessions"] = maxSessions
+	}
+	if activeHours, ok := auth.ActiveHoursOverride(); ok {
+		entry["active_hours"] = activeHours
+	}
+	if pin := auth.ProxyPoolLabel(); pin != "" {
+		entry["proxy_pool_label"] = pin
+	}
 	entry["proxy_source"] = authProxySource(auth, h.cfg)
 	if label := strings.TrimSpace(authAttribute(auth, coreauth.AttributeProxyPoolLabel)); label != "" {
 		entry["proxy_label"] = label
@@ -537,7 +552,7 @@ func authProxySource(auth *coreauth.Auth, cfg *config.Config) string {
 
 // credentialLimitStatusPayload renders effective limits and rolling-window usage for one credential.
 func credentialLimitStatusPayload(status coreauth.CredentialLimitStatus) gin.H {
-	return gin.H{
+	payload := gin.H{
 		"rpm": gin.H{
 			"limit":             status.RPM,
 			"used":              status.RPMUsed,
@@ -552,7 +567,44 @@ func credentialLimitStatusPayload(status coreauth.CredentialLimitStatus) gin.H {
 			"limit":     status.MaxConcurrent,
 			"in_flight": status.InFlight,
 		},
+		"rpd": gin.H{
+			"limit":             status.RPD,
+			"used":              status.RPDUsed,
+			"resets_in_seconds": int64(status.DayResetsIn.Seconds()),
+		},
+		"tpd": gin.H{
+			"limit":             status.TPD,
+			"used":              status.TPDUsed,
+			"resets_in_seconds": int64(status.DayResetsIn.Seconds()),
+		},
+		"max_sessions": gin.H{
+			"limit":          status.MaxSessions,
+			"active":         status.ActiveSessions,
+			"window_seconds": int64(status.SessionWindow.Seconds()),
+		},
+		"active_hours": activeHoursStatusPayload(status),
+		"timezone":     status.Timezone,
 	}
+	for name, pair := range map[string][2]int{
+		"rpm": {status.RPM, status.RPMBase}, "tpm": {status.TPM, status.TPMBase},
+		"rpd": {status.RPD, status.RPDBase}, "tpd": {status.TPD, status.TPDBase},
+	} {
+		if pair[0] != pair[1] {
+			payload[name].(gin.H)["base"] = pair[1]
+		}
+	}
+	return payload
+}
+
+// activeHoursStatusPayload reports the credential's daily window and whether it is
+// currently inside it; next_change_at is the coming edge in the credential's timezone.
+func activeHoursStatusPayload(status coreauth.CredentialLimitStatus) gin.H {
+	payload := gin.H{"window": status.ActiveHours, "awake": status.Awake}
+	if !status.AwakeChangesAt.IsZero() {
+		payload["next_change_at"] = status.AwakeChangesAt
+		payload["next_change_in_seconds"] = int64(time.Until(status.AwakeChangesAt).Seconds())
+	}
+	return payload
 }
 
 func authFileRequestRetryFromJSON(data []byte) (int, bool) {

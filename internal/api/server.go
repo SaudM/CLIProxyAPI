@@ -195,7 +195,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.applyAccessConfig(nil, cfg)
 	if authManager != nil {
 		authManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
-		authManager.SetCredentialLimits(cfg.CredentialLimits)
+		authManager.SetCredentialLimits(cfg.CredentialLimits, cfg.ClaudeHeaderDefaults.Timezone)
 	}
 	managementasset.SetCurrentConfig(cfg)
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)

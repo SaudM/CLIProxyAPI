@@ -79,6 +79,7 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 	var roundTiming homeRetryRoundTiming
 	var limitTracker credentialLimitTracker
 	defer limitTracker.release()
+	sessionKey := credentialSessionKey(opts, req)
 	for homeAuthCount := 1; ; homeAuthCount++ {
 		limitTracker.release()
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -125,7 +126,7 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 		// Local rpm/tpm/max_concurrent admission is an extra cap on top of Home's policy.
 		// Token counting is exempt. A refused credential does not count as an attempt.
 		if !countTokens {
-			lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+			lease, blockedUntil, okLease := m.acquireCredentialLease(auth, sessionKey)
 			if !okLease {
 				limitTracker.noteRefusal(blockedUntil)
 				if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "local_credential_limit"); errEnd != nil {

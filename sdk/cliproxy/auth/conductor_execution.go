@@ -479,6 +479,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	var upstreamErr error
 	var limitTracker credentialLimitTracker
 	defer limitTracker.release()
+	sessionKey := credentialSessionKey(opts, req)
 	for {
 		limitTracker.release()
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -505,7 +506,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		// Local rpm/tpm/max_concurrent admission: a refused credential is skipped for this
 		// round without counting as an attempt, so the loop moves on to the next one.
-		lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+		lease, blockedUntil, okLease := m.acquireCredentialLease(auth, sessionKey)
 		if !okLease {
 			tried[auth.ID] = struct{}{}
 			limitTracker.noteRefusal(blockedUntil)
@@ -930,6 +931,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	var roundTiming homeRetryRoundTiming
 	var limitTracker credentialLimitTracker
 	defer limitTracker.release()
+	sessionKey := credentialSessionKey(opts, req)
 	for {
 		limitTracker.release()
 		allowSameAuthRetry := homeMode && homeSameAuthRetryPending && lastHomeAuthID != "" && homeSameAuthRetries[lastHomeAuthID] == 0
@@ -1036,7 +1038,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 
 		// Local rpm/tpm/max_concurrent admission runs after Home's repeat checks so a
 		// refused credential is excluded from the next dispatch and its slot returned.
-		lease, blockedUntil, okLease := m.acquireCredentialLease(auth)
+		lease, blockedUntil, okLease := m.acquireCredentialLease(auth, sessionKey)
 		if !okLease {
 			tried[auth.ID] = struct{}{}
 			limitTracker.noteRefusal(blockedUntil)

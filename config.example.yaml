@@ -196,12 +196,35 @@ max-retry-interval: 30
 #                  the response (or stream) finishes. In Home mode this is an extra local
 #                  cap on top of the Home concurrency policy.
 # Token counting requests (count_tokens) are exempt from all three limits.
-# Per-provider defaults override the top-level values; a credential's own rpm/tpm/max-concurrent
-# fields (YAML entry or auth JSON file) override both. Explicit 0 means unlimited.
+# Per-provider defaults override the top-level values; a credential's own fields (YAML entry
+# or auth JSON file: rpm/tpm/max-concurrent/rpd/tpd/max-sessions/active-hours) override both.
+# Explicit 0 (or "" for active-hours) means unlimited.
+#
+# Beyond the per-minute caps, the block shapes each account like one person's usage:
+# - rpd / tpd: requests and tokens per calendar day, counted in the credential's own timezone
+#   (proxy-pool timezone, then claude-header-defaults.timezone, then the server clock).
+# - max-sessions: how many distinct downstream sessions (Claude Code session ids; subagents
+#   count with their parent) one credential serves at once. A session stays active for
+#   session-window-minutes after its last request. Sessions already on the credential are
+#   never refused; only a new session beyond the cap moves to another credential.
+# - active-hours: a daily local-time window ("HH:MM-HH:MM", may wrap midnight). Outside it
+#   the credential is skipped, so with a single credential requests get 429 until it opens.
+#   active-hours-jitter-minutes shifts both edges by a stable per-credential, per-day offset.
+# - limit-jitter-percent: scales rpm/tpm/rpd/tpd per credential by a stable offset in ±N%, so
+#   accounts do not share identical caps. The panel shows the effective and base values.
+# A credential over any cap is skipped for the next one; when every candidate is over its
+# caps the request gets HTTP 429 with Retry-After.
 # credential-limits:
-#   rpm: 0
-#   tpm: 0
-#   max-concurrent: 0
+#   rpm: 30
+#   tpm: 2000000
+#   max-concurrent: 4
+#   rpd: 600
+#   tpd: 15000000
+#   max-sessions: 4
+#   session-window-minutes: 15
+#   active-hours: ""            # e.g. "08:30-01:00" once you run two or more accounts
+#   active-hours-jitter-minutes: 45
+#   limit-jitter-percent: 15
 #   providers:
 #     claude:
 #       rpm: 60
@@ -215,7 +238,9 @@ max-retry-interval: 30
 # adding or removing an entry only moves the accounts that hashed to it. An explicit
 # proxy_url (including "direct") always wins. "timezone" makes the cloaked clock of a
 # Claude credential follow the proxy's region unless the credential pins its own.
-# Entries may be plain URL strings or mappings.
+# Entries may be plain URL strings or mappings. An auth file may pin itself to an entry
+# with "proxy_pool_label": "<label>" (the management OAuth login sets it when a label is
+# chosen, so the login exchange and all later traffic share one egress).
 # proxy-pool:
 #   - url: "socks5://user:pass@203.0.113.10:443"
 #     timezone: "Asia/Tokyo"

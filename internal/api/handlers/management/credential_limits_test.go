@@ -97,7 +97,7 @@ func TestPatchAuthFileFields_CredentialLimitOverrides(t *testing.T) {
 
 func TestListAuthFiles_ExposesCredentialLimits(t *testing.T) {
 	h, manager := newLimitsTestHandler(t)
-	manager.SetCredentialLimits(config.CredentialLimits{RPM: 50, TPM: 9000})
+	manager.SetCredentialLimits(config.CredentialLimits{RPM: 50, TPM: 9000}, "")
 	if rec := patchAuthFileFields(t, h, `{"name":"limits.json","max_concurrent":3}`); rec.Code != http.StatusOK {
 		t.Fatalf("patch status = %d", rec.Code)
 	}

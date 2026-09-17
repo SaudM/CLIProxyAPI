@@ -174,6 +174,8 @@ type Manager struct {
 	// limiter enforces per-credential rpm/tpm/max_concurrent; credentialLimits holds the global defaults.
 	limiter          *credentialLimiter
 	credentialLimits atomic.Pointer[internalconfig.CredentialLimits]
+	// credentialTimezone is the fallback clock for daily budgets and active hours.
+	credentialTimezone atomic.Pointer[string]
 
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value

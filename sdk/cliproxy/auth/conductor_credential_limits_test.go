@@ -150,7 +150,7 @@ func TestExecute_SkipsCredentialOverConcurrencyLimit(t *testing.T) {
 	})
 
 	// Hold auth-a's single slot so the next request must land on auth-b.
-	lease, _, ok := m.limiter.tryAcquire("auth-a", m.effectiveCredentialLimits(&Auth{ID: "auth-a", Metadata: map[string]any{"max_concurrent": 1}}))
+	lease, _, ok := m.limiter.tryAcquire("auth-a", "", m.effectiveCredentialLimits(&Auth{ID: "auth-a", Metadata: map[string]any{"max_concurrent": 1}}))
 	if !ok {
 		t.Fatalf("could not pre-hold auth-a slot")
 	}
@@ -181,7 +181,7 @@ func TestExecute_AllCredentialsOverLimitReturns429WithRetryAfter(t *testing.T) {
 
 	// Exhaust both credentials' rpm budget.
 	for _, id := range []string{"auth-a", "auth-b"} {
-		lease, _, ok := m.limiter.tryAcquire(id, credentialLimits{RPM: 1})
+		lease, _, ok := m.limiter.tryAcquire(id, "", credentialLimits{RPM: 1})
 		if !ok {
 			t.Fatalf("pre-exhaust %s refused", id)
 		}
@@ -221,7 +221,7 @@ func TestExecute_LimitBlockedCredentialDrivesRetryWait(t *testing.T) {
 	registerLimitAuths(t, m, model, map[string]map[string]any{
 		"auth-a": {"rpm": 1},
 	})
-	lease, _, ok := m.limiter.tryAcquire("auth-a", credentialLimits{RPM: 1})
+	lease, _, ok := m.limiter.tryAcquire("auth-a", "", credentialLimits{RPM: 1})
 	if !ok {
 		t.Fatalf("pre-exhaust refused")
 	}
@@ -320,7 +320,7 @@ func TestExecuteCount_IgnoresCredentialLimits(t *testing.T) {
 	registerLimitAuths(t, m, model, map[string]map[string]any{
 		"auth-a": {"max_concurrent": 1, "rpm": 1},
 	})
-	lease, _, ok := m.limiter.tryAcquire("auth-a", credentialLimits{MaxConcurrent: 1, RPM: 1})
+	lease, _, ok := m.limiter.tryAcquire("auth-a", "", credentialLimits{MaxConcurrent: 1, RPM: 1})
 	if !ok {
 		t.Fatalf("pre-hold refused")
 	}
@@ -339,7 +339,7 @@ func TestRemove_ClearsLimiterState(t *testing.T) {
 	m, _ := newLimitTestManager(t, executor)
 	model := "limit-remove-" + uuid.NewString()
 	registerLimitAuths(t, m, model, map[string]map[string]any{"auth-a": {"rpm": 1}})
-	lease, _, _ := m.limiter.tryAcquire("auth-a", credentialLimits{RPM: 1})
+	lease, _, _ := m.limiter.tryAcquire("auth-a", "", credentialLimits{RPM: 1})
 	lease.Release()
 	m.Remove(context.Background(), "auth-a")
 	m.limiter.mu.Lock()

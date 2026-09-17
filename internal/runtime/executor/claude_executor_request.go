@@ -1200,6 +1200,9 @@ func applyClaudeHeadersWithNativeProfile(
 		r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	}
 	applyTransportNegotiation()
+	if confirmedClaudeCode && auth != nil {
+		helps.RecordClaudeClientVersion(auth.ID, incomingHeaders.Get("User-Agent"))
+	}
 	// Confirmed Claude Code requests may contribute their real software profile.
 	// Unconfirmed clients always receive the CLI baseline instead of being
 	// allowed to populate or reuse another client's software profile.

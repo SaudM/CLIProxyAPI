@@ -48,18 +48,18 @@ vertex-api-key:
 	if _, ok := limits.Providers["claude"]; !ok {
 		t.Fatalf("provider key not normalized: %v", limits.Providers)
 	}
-	if rpm, tpm, mc := limits.Resolve("claude"); rpm != 60 || tpm != 100000 || mc != 4 {
-		t.Fatalf("Resolve(claude) = (%d, %d, %d), want (60, 100000, 4)", rpm, tpm, mc)
+	if r := limits.Resolve("claude"); r.RPM != 60 || r.TPM != 100000 || r.MaxConcurrent != 4 {
+		t.Fatalf("Resolve(claude) = %+v, want (60, 100000, 4)", r)
 	}
-	if rpm, _, mc := limits.Resolve("CODEX"); rpm != 30 || mc != 2 {
-		t.Fatalf("Resolve(CODEX) = (%d, _, %d), want (30, _, 2)", rpm, mc)
+	if r := limits.Resolve("CODEX"); r.RPM != 30 || r.MaxConcurrent != 2 {
+		t.Fatalf("Resolve(CODEX) = %+v, want (30, _, 2)", r)
 	}
-	if rpm, tpm, mc := limits.Resolve("gemini"); rpm != 30 || tpm != 100000 || mc != 4 {
-		t.Fatalf("Resolve(gemini) = (%d, %d, %d), want globals", rpm, tpm, mc)
+	if r := limits.Resolve("gemini"); r.RPM != 30 || r.TPM != 100000 || r.MaxConcurrent != 4 {
+		t.Fatalf("Resolve(gemini) = %+v, want globals", r)
 	}
 	// First matching key wins.
-	if rpm, _, _ := limits.Resolve("unknown", "claude", "codex"); rpm != 60 {
-		t.Fatalf("Resolve first-match rpm = %d, want 60", rpm)
+	if r := limits.Resolve("unknown", "claude", "codex"); r.RPM != 60 {
+		t.Fatalf("Resolve first-match rpm = %d, want 60", r.RPM)
 	}
 
 	claude := cfg.ClaudeKey[0]
@@ -112,8 +112,8 @@ func TestCredentialLimitsZeroValueIsUnlimited(t *testing.T) {
 	if errParse != nil {
 		t.Fatalf("ParseConfigBytes() error = %v", errParse)
 	}
-	if rpm, tpm, mc := cfg.CredentialLimits.Resolve("claude"); rpm != 0 || tpm != 0 || mc != 0 {
-		t.Fatalf("default limits = (%d, %d, %d), want all zero", rpm, tpm, mc)
+	if r := cfg.CredentialLimits.Resolve("claude"); r.RPM != 0 || r.TPM != 0 || r.MaxConcurrent != 0 {
+		t.Fatalf("default limits = %+v, want all zero", r)
 	}
 	if err := cfg.CredentialLimits.Validate(); err != nil {
 		t.Fatalf("zero-value Validate() = %v", err)

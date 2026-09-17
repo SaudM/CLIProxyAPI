@@ -16,6 +16,12 @@ func CanonicalCredentialMetadataKey(key string) string {
 		return "fingerprint_profile"
 	case "max-concurrent":
 		return "max_concurrent"
+	case "max-sessions":
+		return "max_sessions"
+	case "active-hours":
+		return "active_hours"
+	case "proxy-pool-label":
+		return "proxy_pool_label"
 	case "model-aliases":
 		return "model_aliases"
 	case "proxy-url":

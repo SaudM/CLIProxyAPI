@@ -685,6 +685,24 @@ func appendCredentialLimitsChange(changes []string, oldLimits, newLimits config.
 	if oldLimits.MaxConcurrent != newLimits.MaxConcurrent {
 		changes = append(changes, fmt.Sprintf("credential-limits.max-concurrent: %d -> %d", oldLimits.MaxConcurrent, newLimits.MaxConcurrent))
 	}
+	for _, field := range []struct {
+		name     string
+		old, new int
+	}{
+		{"rpd", oldLimits.RPD, newLimits.RPD},
+		{"tpd", oldLimits.TPD, newLimits.TPD},
+		{"max-sessions", oldLimits.MaxSessions, newLimits.MaxSessions},
+		{"session-window-minutes", oldLimits.SessionWindowMinutes, newLimits.SessionWindowMinutes},
+		{"active-hours-jitter-minutes", oldLimits.ActiveHoursJitterMinutes, newLimits.ActiveHoursJitterMinutes},
+		{"limit-jitter-percent", oldLimits.LimitJitterPercent, newLimits.LimitJitterPercent},
+	} {
+		if field.old != field.new {
+			changes = append(changes, fmt.Sprintf("credential-limits.%s: %d -> %d", field.name, field.old, field.new))
+		}
+	}
+	if oldLimits.ActiveHours != newLimits.ActiveHours {
+		changes = append(changes, fmt.Sprintf("credential-limits.active-hours: %q -> %q", oldLimits.ActiveHours, newLimits.ActiveHours))
+	}
 	if !reflect.DeepEqual(oldLimits.Providers, newLimits.Providers) {
 		changes = append(changes, "credential-limits.providers updated")
 	}
@@ -694,5 +712,12 @@ func appendCredentialLimitsChange(changes []string, oldLimits, newLimits config.
 func appendCredentialLimitValuesChange(changes []string, prefix string, oldVals, newVals config.CredentialLimitValues) []string {
 	changes = appendOptionalIntChange(changes, prefix+".rpm", oldVals.RPM, newVals.RPM)
 	changes = appendOptionalIntChange(changes, prefix+".tpm", oldVals.TPM, newVals.TPM)
-	return appendOptionalIntChange(changes, prefix+".max-concurrent", oldVals.MaxConcurrent, newVals.MaxConcurrent)
+	changes = appendOptionalIntChange(changes, prefix+".max-concurrent", oldVals.MaxConcurrent, newVals.MaxConcurrent)
+	changes = appendOptionalIntChange(changes, prefix+".rpd", oldVals.RPD, newVals.RPD)
+	changes = appendOptionalIntChange(changes, prefix+".tpd", oldVals.TPD, newVals.TPD)
+	changes = appendOptionalIntChange(changes, prefix+".max-sessions", oldVals.MaxSessions, newVals.MaxSessions)
+	if !reflect.DeepEqual(oldVals.ActiveHours, newVals.ActiveHours) {
+		changes = append(changes, prefix+".active-hours updated")
+	}
+	return changes
 }

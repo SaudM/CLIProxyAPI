@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"strings"
 
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
@@ -146,6 +147,9 @@ func (e *ClaudeExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string
 		}
 	}
 	report["cc_version"] = helps.CredentialClaudeVersion(e.cfg, auth)
+	if versions := helps.ClaudeClientVersions(auth.ID); len(versions) > 0 {
+		report["clients"] = claudeClientVersionsReport(report, versions, helps.DefaultClaudeDeviceProfile(e.cfg, auth).UserAgent)
+	}
 	if !stabilized {
 		fingerprintAddWarning(report, "stabilize-device-profile is off: confirmed native clients that omit X-Stainless-OS/Arch get the proxy host's OS/arch")
 	}
@@ -153,4 +157,28 @@ func (e *ClaudeExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string
 		fingerprintAddWarning(report, "oauth credential has no access_token in metadata")
 	}
 	return report
+}
+
+// claudeClientVersionsReport lists the native Claude Code versions this credential served in
+// the last 24 hours and warns when one differs from the baseline the credential presents.
+func claudeClientVersionsReport(report map[string]any, versions []helps.ClaudeClientVersionStat, baselineUserAgent string) map[string]any {
+	baseline, _ := helps.ClaudeClientVersionFromUserAgent(baselineUserAgent)
+	items := make([]map[string]any, 0, len(versions))
+	mismatched := make([]string, 0)
+	for _, stat := range versions {
+		items = append(items, map[string]any{
+			"version":    stat.Version,
+			"requests":   stat.Requests,
+			"first_seen": stat.FirstSeen,
+			"last_seen":  stat.LastSeen,
+			"baseline":   stat.Version == baseline,
+		})
+		if stat.Version != baseline {
+			mismatched = append(mismatched, fmt.Sprintf("%s (%d requests)", stat.Version, stat.Requests))
+		}
+	}
+	if len(mismatched) > 0 {
+		fingerprintAddWarning(report, fmt.Sprintf("downstream Claude Code %s differs from the credential baseline %s: their User-Agent is rewritten to the baseline while their system prompt keeps the client's own text; align client versions or pin this credential to one version", strings.Join(mismatched, ", "), baseline))
+	}
+	return map[string]any{"baseline": baseline, "window_hours": 24, "versions": items}
 }

@@ -535,6 +535,37 @@ func (a *Auth) MaxConcurrentOverride() (int, bool) {
 	return a.metadataIntOverride("max_concurrent")
 }
 
+// RPDOverride returns the auth-scoped rpd (requests per day) override when present.
+func (a *Auth) RPDOverride() (int, bool) { return a.metadataIntOverride("rpd") }
+
+// TPDOverride returns the auth-scoped tpd (tokens per day) override when present.
+func (a *Auth) TPDOverride() (int, bool) { return a.metadataIntOverride("tpd") }
+
+// MaxSessionsOverride returns the auth-scoped max_sessions override when present.
+func (a *Auth) MaxSessionsOverride() (int, bool) { return a.metadataIntOverride("max_sessions") }
+
+// ActiveHoursOverride returns the auth-scoped active_hours window when present.
+// An explicit empty string means "always on" and overrides the config default.
+func (a *Auth) ActiveHoursOverride() (string, bool) { return a.metadataStringOverride("active_hours") }
+
+// ProxyPoolLabel returns the proxy-pool entry this auth is pinned to, if any.
+func (a *Auth) ProxyPoolLabel() string {
+	value, _ := a.metadataStringOverride("proxy_pool_label")
+	return value
+}
+
+// metadataStringOverride reads a string override from metadata; non-strings are ignored.
+func (a *Auth) metadataStringOverride(key string) (string, bool) {
+	if a == nil || a.Metadata == nil {
+		return "", false
+	}
+	value, ok := a.Metadata[key].(string)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(value), true
+}
+
 // metadataIntOverride reads a non-negative integer override from metadata.
 // A negative value is treated as unset.
 func (a *Auth) metadataIntOverride(key string) (int, bool) {

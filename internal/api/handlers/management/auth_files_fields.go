@@ -390,6 +390,18 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 			return
 		}
 	}
+	if _, touched := touchedRoots["active_hours"]; touched {
+		if errHours := validateAuthFileActiveHours(targetAuth); errHours != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errHours.Error()})
+			return
+		}
+	}
+	if _, touched := touchedRoots["proxy_pool_label"]; touched {
+		if errLabel := h.validateAuthFileProxyPoolLabel(targetAuth); errLabel != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errLabel.Error()})
+			return
+		}
+	}
 	if changed {
 		syncAuthFileMetadataFields(targetAuth, touchedRoots)
 	}
@@ -431,7 +443,7 @@ func decodeAuthFileFieldValue(raw json.RawMessage) (any, error) {
 }
 
 // authFileIntPatchKeys are the integer metadata fields decoded out-of-band by PatchAuthFileFields.
-var authFileIntPatchKeys = []string{"request_retry", "rpm", "tpm", "max_concurrent"}
+var authFileIntPatchKeys = []string{"request_retry", "rpm", "tpm", "max_concurrent", "rpd", "tpd", "max_sessions"}
 
 type authFileIntPatch struct {
 	Set   bool
@@ -1076,4 +1088,68 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 		}
 	}
 	return savedPath, nil
+}
+
+// validateAuthFileActiveHours checks a patched active_hours window. An empty string
+// stays as an explicit "always on" override; a non-string value is rejected.
+func validateAuthFileActiveHours(auth *coreauth.Auth) error {
+	if auth == nil || auth.Metadata == nil {
+		return nil
+	}
+	raw, present := auth.Metadata["active_hours"]
+	if !present {
+		return nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("active_hours must be a string like \"08:30-01:00\" or null")
+	}
+	if _, errParse := config.ParseActiveHours(value); errParse != nil {
+		return errParse
+	}
+	auth.Metadata["active_hours"] = strings.TrimSpace(value)
+	return nil
+}
+
+// validateAuthFileProxyPoolLabel checks a patched proxy_pool_label against the configured
+// pool. An empty string removes the pin so the stable hash assignment applies again.
+func (h *Handler) validateAuthFileProxyPoolLabel(auth *coreauth.Auth) error {
+	if auth == nil || auth.Metadata == nil {
+		return nil
+	}
+	raw, present := auth.Metadata["proxy_pool_label"]
+	if !present {
+		return nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("proxy_pool_label must be a string or null")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		delete(auth.Metadata, "proxy_pool_label")
+		return nil
+	}
+	if _, found := h.proxyPoolEntryByLabel(value); !found {
+		return fmt.Errorf("proxy_pool_label %q does not match any proxy-pool entry", value)
+	}
+	auth.Metadata["proxy_pool_label"] = value
+	return nil
+}
+
+// proxyPoolEntryByLabel finds a configured proxy-pool entry by its label (case-insensitive).
+func (h *Handler) proxyPoolEntryByLabel(label string) (config.ProxyPoolEntry, bool) {
+	label = strings.TrimSpace(label)
+	if h == nil || h.cfg == nil || label == "" {
+		return config.ProxyPoolEntry{}, false
+	}
+	h.mu.Lock()
+	pool := append([]config.ProxyPoolEntry(nil), h.cfg.ProxyPool...)
+	h.mu.Unlock()
+	for _, entry := range pool {
+		if strings.EqualFold(strings.TrimSpace(entry.Label), label) {
+			return entry, true
+		}
+	}
+	return config.ProxyPoolEntry{}, false
 }

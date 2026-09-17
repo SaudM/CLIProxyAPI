@@ -49,19 +49,19 @@ func TestCredentialLimiter_RPMRefusesAtLimitAndRecoversAtOldestBucket(t *testing
 	limiter := newTestLimiter(clock)
 	limits := credentialLimits{RPM: 2}
 
-	first, _, ok := limiter.tryAcquire("a", limits)
+	first, _, ok := limiter.tryAcquire("a", "", limits)
 	if !ok || first == nil {
 		t.Fatalf("first acquire refused")
 	}
 	first.Release()
 	clock.Advance(10 * time.Second)
-	second, _, ok := limiter.tryAcquire("a", limits)
+	second, _, ok := limiter.tryAcquire("a", "", limits)
 	if !ok {
 		t.Fatalf("second acquire refused")
 	}
 	second.Release()
 
-	_, blockedUntil, ok := limiter.tryAcquire("a", limits)
+	_, blockedUntil, ok := limiter.tryAcquire("a", "", limits)
 	if ok {
 		t.Fatalf("third acquire admitted over rpm limit")
 	}
@@ -69,7 +69,7 @@ func TestCredentialLimiter_RPMRefusesAtLimitAndRecoversAtOldestBucket(t *testing
 	if !blockedUntil.Equal(wantRecover) {
 		t.Fatalf("blockedUntil = %v, want %v (oldest bucket + 60s)", blockedUntil, wantRecover)
 	}
-	if wait := limiter.nextAvailable("a", limits); wait != wantRecover.Sub(clock.Now()) {
+	if wait := limiter.nextAvailable("a", "", limits); wait != wantRecover.Sub(clock.Now()) {
 		t.Fatalf("nextAvailable = %v, want %v", wait, wantRecover.Sub(clock.Now()))
 	}
 	// Refusal must not have consumed budget.
@@ -78,7 +78,7 @@ func TestCredentialLimiter_RPMRefusesAtLimitAndRecoversAtOldestBucket(t *testing
 	}
 
 	clock.now = wantRecover
-	if _, _, ok = limiter.tryAcquire("a", limits); !ok {
+	if _, _, ok = limiter.tryAcquire("a", "", limits); !ok {
 		t.Fatalf("acquire at recovery instant refused")
 	}
 }
@@ -88,26 +88,26 @@ func TestCredentialLimiter_TPMUsesRecordedTokens(t *testing.T) {
 	limiter := newTestLimiter(clock)
 	limits := credentialLimits{TPM: 1000}
 
-	if _, _, ok := limiter.tryAcquire("a", limits); !ok {
+	if _, _, ok := limiter.tryAcquire("a", "", limits); !ok {
 		t.Fatalf("acquire with empty window refused")
 	}
 	limiter.recordTokens("a", 999)
-	if _, _, ok := limiter.tryAcquire("a", limits); !ok {
+	if _, _, ok := limiter.tryAcquire("a", "", limits); !ok {
 		t.Fatalf("acquire under tpm limit refused")
 	}
 	limiter.recordTokens("a", 1)
-	_, blockedUntil, ok := limiter.tryAcquire("a", limits)
+	_, blockedUntil, ok := limiter.tryAcquire("a", "", limits)
 	if ok {
 		t.Fatalf("acquire at tpm limit admitted")
 	}
 	if want := time.Unix(clock.Now().Unix()+60, 0); !blockedUntil.Equal(want) {
 		t.Fatalf("blockedUntil = %v, want %v", blockedUntil, want)
 	}
-	if wait := limiter.nextAvailable("a", limits); wait != 60*time.Second {
+	if wait := limiter.nextAvailable("a", "", limits); wait != 60*time.Second {
 		t.Fatalf("nextAvailable = %v while tpm exhausted, want 60s", wait)
 	}
 	clock.Advance(61 * time.Second)
-	if _, _, ok = limiter.tryAcquire("a", limits); !ok {
+	if _, _, ok = limiter.tryAcquire("a", "", limits); !ok {
 		t.Fatalf("acquire after window rolled refused")
 	}
 }
@@ -117,11 +117,11 @@ func TestCredentialLimiter_ConcurrencyLeaseReleaseIsExactlyOnce(t *testing.T) {
 	limiter := newTestLimiter(clock)
 	limits := credentialLimits{MaxConcurrent: 1}
 
-	lease, _, ok := limiter.tryAcquire("a", limits)
+	lease, _, ok := limiter.tryAcquire("a", "", limits)
 	if !ok {
 		t.Fatalf("first acquire refused")
 	}
-	_, blockedUntil, ok := limiter.tryAcquire("a", limits)
+	_, blockedUntil, ok := limiter.tryAcquire("a", "", limits)
 	if ok {
 		t.Fatalf("second acquire admitted over concurrency limit")
 	}
@@ -133,7 +133,7 @@ func TestCredentialLimiter_ConcurrencyLeaseReleaseIsExactlyOnce(t *testing.T) {
 	if snap := limiter.snapshot("a", limits); snap.InFlight != 0 {
 		t.Fatalf("inFlight after double release = %d, want 0", snap.InFlight)
 	}
-	if _, _, ok = limiter.tryAcquire("a", limits); !ok {
+	if _, _, ok = limiter.tryAcquire("a", "", limits); !ok {
 		t.Fatalf("acquire after release refused")
 	}
 	var nilLease *credentialLease
@@ -143,7 +143,7 @@ func TestCredentialLimiter_ConcurrencyLeaseReleaseIsExactlyOnce(t *testing.T) {
 func TestCredentialLimiter_ReleaseAfterRemoveIsNoop(t *testing.T) {
 	limiter := newTestLimiter(newFakeClock())
 	limits := credentialLimits{MaxConcurrent: 1}
-	lease, _, ok := limiter.tryAcquire("a", limits)
+	lease, _, ok := limiter.tryAcquire("a", "", limits)
 	if !ok {
 		t.Fatalf("acquire refused")
 	}
@@ -159,7 +159,7 @@ func TestCredentialLimiter_ReleaseAfterRemoveIsNoop(t *testing.T) {
 
 func TestCredentialLimiter_DisabledLimitsAreFastPath(t *testing.T) {
 	limiter := newTestLimiter(newFakeClock())
-	lease, blockedUntil, ok := limiter.tryAcquire("a", credentialLimits{})
+	lease, blockedUntil, ok := limiter.tryAcquire("a", "", credentialLimits{})
 	if !ok || lease != nil || !blockedUntil.IsZero() {
 		t.Fatalf("disabled limits = (%v, %v, %t), want (nil, zero, true)", lease, blockedUntil, ok)
 	}
@@ -169,7 +169,7 @@ func TestCredentialLimiter_DisabledLimitsAreFastPath(t *testing.T) {
 	if entries != 0 {
 		t.Fatalf("fast path created %d entries, want 0", entries)
 	}
-	if wait := limiter.nextAvailable("a", credentialLimits{}); wait != 0 {
+	if wait := limiter.nextAvailable("a", "", credentialLimits{}); wait != 0 {
 		t.Fatalf("nextAvailable for disabled limits = %v, want 0", wait)
 	}
 }
@@ -182,18 +182,18 @@ func TestManager_EffectiveCredentialLimitsPrecedence(t *testing.T) {
 			"Claude": {RPM: intPtr(20)},
 		},
 	}
-	m.SetCredentialLimits(global)
+	m.SetCredentialLimits(global, "")
 
 	codex := &Auth{ID: "codex", Provider: "codex"}
-	if got := m.effectiveCredentialLimits(codex); got != (credentialLimits{RPM: 10, TPM: 1000, MaxConcurrent: 3}) {
+	if got := coreCredentialLimits(m.effectiveCredentialLimits(codex)); got != (credentialLimits{RPM: 10, TPM: 1000, MaxConcurrent: 3}) {
 		t.Fatalf("codex limits = %+v, want globals", got)
 	}
 	claude := &Auth{ID: "claude", Provider: "claude"}
-	if got := m.effectiveCredentialLimits(claude); got != (credentialLimits{RPM: 20, TPM: 1000, MaxConcurrent: 3}) {
+	if got := coreCredentialLimits(m.effectiveCredentialLimits(claude)); got != (credentialLimits{RPM: 20, TPM: 1000, MaxConcurrent: 3}) {
 		t.Fatalf("claude limits = %+v, want provider rpm override", got)
 	}
 	overridden := &Auth{ID: "claude-2", Provider: "claude", Metadata: map[string]any{"rpm": 0, "tpm": "500", "max_concurrent": float64(1)}}
-	if got := m.effectiveCredentialLimits(overridden); got != (credentialLimits{RPM: 0, TPM: 500, MaxConcurrent: 1}) {
+	if got := coreCredentialLimits(m.effectiveCredentialLimits(overridden)); got != (credentialLimits{RPM: 0, TPM: 500, MaxConcurrent: 1}) {
 		t.Fatalf("overridden limits = %+v, want per-auth values (explicit 0 = unlimited)", got)
 	}
 	negative := &Auth{ID: "claude-3", Provider: "claude", Metadata: map[string]any{"rpm": -5}}
@@ -243,3 +243,8 @@ func TestCredentialLimitError_StatusAndRetryAfter(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// coreCredentialLimits keeps only the per-minute/concurrency fields for equality checks.
+func coreCredentialLimits(l credentialLimits) credentialLimits {
+	return credentialLimits{RPM: l.RPM, TPM: l.TPM, MaxConcurrent: l.MaxConcurrent}
+}

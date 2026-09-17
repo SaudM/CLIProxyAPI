@@ -136,7 +136,8 @@ func (w *Watcher) reloadConfig() bool {
 
 	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
 	retryConfigChanged := oldConfig != nil && (oldConfig.RequestRetry != newConfig.RequestRetry || oldConfig.MaxRetryInterval != newConfig.MaxRetryInterval || oldConfig.MaxRetryCredentials != newConfig.MaxRetryCredentials)
-	proxyPoolChanged := oldConfig != nil && !reflect.DeepEqual(oldConfig.ProxyPool, newConfig.ProxyPool)
+	proxyPoolChanged := oldConfig != nil && (!reflect.DeepEqual(oldConfig.ProxyPool, newConfig.ProxyPool) ||
+		!reflect.DeepEqual(oldConfig.ClaudeHeaderDefaults.PlatformPool, newConfig.ClaudeHeaderDefaults.PlatformPool))
 	forceAuthRefresh := oldConfig != nil && (oldConfig.ForceModelPrefix != newConfig.ForceModelPrefix || !reflect.DeepEqual(oldConfig.OAuthModelAlias, newConfig.OAuthModelAlias) || retryConfigChanged || proxyPoolChanged)
 
 	log.Infof("config successfully reloaded, triggering client reload")

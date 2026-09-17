@@ -66,6 +66,11 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if errValidate := cfg.ValidateProxyPool(); errValidate != nil {
 		return nil, errValidate
 	}
+	// Validate before normalizing so a negative weight is rejected rather than dropped.
+	if errValidate := cfg.ValidateClaudePlatformPool(); errValidate != nil {
+		return nil, errValidate
+	}
+	cfg.NormalizeClaudePlatformPool()
 	if cfg.Discovery.ServiceType == "" {
 		cfg.Discovery.ServiceType = DefaultDiscoveryServiceType
 	}

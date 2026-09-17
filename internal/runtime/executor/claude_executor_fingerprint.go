@@ -45,6 +45,9 @@ func (e *ClaudeExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string
 				break
 			}
 		}
+		if strings.EqualFold(strings.TrimSpace(auth.Attributes[cliproxyauth.AttributeClaudeDevicePool]), "true") {
+			device["source"] = "platform-pool"
+		}
 	}
 	stabilized := helps.ClaudeDeviceProfileStabilizationEnabled(e.cfg)
 	if stabilized {

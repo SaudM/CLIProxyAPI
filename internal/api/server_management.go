@@ -127,6 +127,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/credential-limits", s.mgmt.PutCredentialLimits)
 		mgmt.PATCH("/credential-limits", s.mgmt.PutCredentialLimits)
 		mgmt.GET("/proxy-pool", s.mgmt.GetProxyPool)
+		mgmt.GET("/credential-pools", s.mgmt.GetCredentialPools)
 
 		mgmt.GET("/force-model-prefix", s.mgmt.GetForceModelPrefix)
 		mgmt.PUT("/force-model-prefix", s.mgmt.PutForceModelPrefix)

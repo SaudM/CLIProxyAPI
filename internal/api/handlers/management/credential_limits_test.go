@@ -351,3 +351,45 @@ func TestProxyPoolEndpointAndProxySource(t *testing.T) {
 		t.Fatalf("proxy_source = %v", sources)
 	}
 }
+
+func TestCredentialPoolsEndpoint(t *testing.T) {
+	h, manager := newLimitsTestHandler(t)
+	stabilize := true
+	h.cfg.ProxyPool = []config.ProxyPoolEntry{{URL: "socks5://u:secret@10.0.0.1:443", Timezone: "Asia/Tokyo", Label: "jp-1"}}
+	h.cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile = &stabilize
+	h.cfg.ClaudeHeaderDefaults.PlatformPool = []config.ClaudePlatformPoolEntry{
+		{OS: "MacOS", Arch: "arm64", Weight: 6}, {OS: "Windows", Arch: "x64", Weight: 2},
+	}
+	pooled := &coreauth.Auth{
+		ID: "pooled.json", FileName: "pooled.json", Provider: "claude", ProxyURL: "socks5://u:secret@10.0.0.1:443",
+		Attributes: map[string]string{
+			"path": "/tmp/pooled.json", coreauth.AttributeProxyPool: "true",
+			coreauth.AttributeClaudeDevicePool: "true", coreauth.AttributeClaudeDeviceOS: "Windows", coreauth.AttributeClaudeDeviceArch: "x64",
+		},
+		Metadata: map[string]any{"type": "claude"},
+	}
+	if _, err := manager.Register(context.Background(), pooled); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/credential-pools", nil)
+	h.GetCredentialPools(ctx)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Proxy     []map[string]any `json:"proxy-pool"`
+		Platform  []map[string]any `json:"platform-pool"`
+		Stabilize bool             `json:"stabilize-device-profile"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !payload.Stabilize || len(payload.Proxy) != 1 || payload.Proxy[0]["assigned"].(float64) != 1 {
+		t.Fatalf("payload = %s", rec.Body.String())
+	}
+	if len(payload.Platform) != 2 || payload.Platform[1]["assigned"].(float64) != 1 || payload.Platform[0]["assigned"].(float64) != 0 || payload.Platform[0]["weight"].(float64) != 6 {
+		t.Fatalf("platform payload = %v", payload.Platform)
+	}
+}

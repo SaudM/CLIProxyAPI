@@ -86,6 +86,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if !reflect.DeepEqual(oldCfg.ProxyPool, newCfg.ProxyPool) {
 		changes = append(changes, fmt.Sprintf("proxy-pool: updated (%d -> %d entries)", len(oldCfg.ProxyPool), len(newCfg.ProxyPool)))
 	}
+	if !reflect.DeepEqual(oldCfg.ClaudeHeaderDefaults.PlatformPool, newCfg.ClaudeHeaderDefaults.PlatformPool) {
+		changes = append(changes, fmt.Sprintf("claude-header-defaults.platform-pool: updated (%d -> %d entries)", len(oldCfg.ClaudeHeaderDefaults.PlatformPool), len(newCfg.ClaudeHeaderDefaults.PlatformPool)))
+	}
 	if oldCfg.ProxyURL != newCfg.ProxyURL {
 		changes = append(changes, fmt.Sprintf("proxy-url: %s -> %s", formatProxyURL(oldCfg.ProxyURL), formatProxyURL(newCfg.ProxyURL)))
 	}

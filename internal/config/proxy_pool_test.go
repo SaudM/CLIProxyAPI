@@ -46,3 +46,43 @@ func TestParseConfigBytesProxyPoolValidation(t *testing.T) {
 		t.Fatalf("empty pool must be valid: %v", err)
 	}
 }
+
+func TestParseConfigBytesClaudePlatformPool(t *testing.T) {
+	cfg, err := ParseConfigBytes([]byte(`
+claude-header-defaults:
+  stabilize-device-profile: true
+  platform-pool:
+    - { os: "MacOS", arch: "arm64", weight: 6 }
+    - { os: " Windows ", arch: "x64" }
+    - { os: "MacOS", arch: "arm64", weight: 2 }
+    - { os: "Linux", arch: "x64", weight: 0 }
+`))
+	if err != nil {
+		t.Fatalf("ParseConfigBytes error = %v", err)
+	}
+	pool := cfg.ClaudeHeaderDefaults.PlatformPool
+	if len(pool) != 3 {
+		t.Fatalf("pool = %+v, want 3 entries (duplicate merged)", pool)
+	}
+	if pool[0].Weight != 8 || pool[1].OS != "Windows" || pool[1].Weight != 1 {
+		t.Fatalf("pool = %+v", pool)
+	}
+	// weight 0 is normalized to the default 1, so the Linux entry stays.
+	if pool[2].OS != "Linux" || pool[2].Weight != 1 {
+		t.Fatalf("pool[2] = %+v", pool[2])
+	}
+	if cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile == nil || !*cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile {
+		t.Fatalf("stabilize-device-profile not parsed")
+	}
+	for name, yaml := range map[string]string{
+		"bad os":          "claude-header-defaults:\n  platform-pool:\n    - { os: \"macos\", arch: \"arm64\" }\n",
+		"bad arch":        "claude-header-defaults:\n  platform-pool:\n    - { os: \"MacOS\", arch: \"amd64\" }\n",
+		"negative weight": "claude-header-defaults:\n  platform-pool:\n    - { os: \"MacOS\", arch: \"arm64\", weight: -1 }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, errParse := ParseConfigBytes([]byte(yaml)); errParse == nil || !strings.Contains(errParse.Error(), "platform-pool[0]") {
+				t.Fatalf("ParseConfigBytes error = %v, want platform-pool[0] validation error", errParse)
+			}
+		})
+	}
+}

@@ -88,4 +88,6 @@ const (
 	AttributeClaudeDeviceRuntimeVersion = "device_profile_runtime_version"
 	AttributeClaudeDeviceOS             = "device_profile_os"
 	AttributeClaudeDeviceArch           = "device_profile_arch"
+	// AttributeClaudeDevicePool marks a platform assigned from claude-header-defaults.platform-pool.
+	AttributeClaudeDevicePool = "device_profile_pool"
 )

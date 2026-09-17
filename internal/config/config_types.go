@@ -125,6 +125,10 @@ type ClaudeHeaderDefaults struct {
 	Timeout                string `yaml:"timeout" json:"timeout"`
 	Timezone               string `yaml:"timezone" json:"timezone"`
 	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+	// PlatformPool lists (os, arch) platforms assigned automatically to Claude
+	// credentials without a device-profile platform, by a stable hash of the
+	// credential ID, so accounts on one node do not all present the same machine.
+	PlatformPool []ClaudePlatformPoolEntry `yaml:"platform-pool,omitempty" json:"platform-pool,omitempty"`
 }
 
 // CodexHeaderDefaults configures fallback header values injected into Codex

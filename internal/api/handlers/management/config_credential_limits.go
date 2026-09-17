@@ -47,6 +47,55 @@ func (h *Handler) GetProxyPool(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"proxy-pool": entries})
 }
 
+// GetCredentialPools reports both automatic assignment pools (outbound proxies and
+// Claude device platforms) with how many credentials currently land on each entry,
+// so the panel can show what the defaults resolve to without exposing proxy secrets.
+func (h *Handler) GetCredentialPools(c *gin.Context) {
+	h.mu.Lock()
+	proxyPool := append([]config.ProxyPoolEntry(nil), h.cfg.ProxyPool...)
+	platformPool := append([]config.ClaudePlatformPoolEntry(nil), h.cfg.ClaudeHeaderDefaults.PlatformPool...)
+	stabilize := h.cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile != nil && *h.cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile
+	h.mu.Unlock()
+	proxyAssigned := make(map[string]int, len(proxyPool))
+	platformAssigned := make(map[string]int, len(platformPool))
+	if h.authManager != nil {
+		for _, auth := range h.authManager.List() {
+			if auth == nil {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(authAttribute(auth, coreauth.AttributeProxyPool)), "true") {
+				proxyAssigned[strings.TrimSpace(auth.ProxyURL)]++
+			}
+			if strings.EqualFold(strings.TrimSpace(authAttribute(auth, coreauth.AttributeClaudeDevicePool)), "true") {
+				platformAssigned[authAttribute(auth, coreauth.AttributeClaudeDeviceOS)+"/"+authAttribute(auth, coreauth.AttributeClaudeDeviceArch)]++
+			}
+		}
+	}
+	proxies := make([]gin.H, 0, len(proxyPool))
+	for _, entry := range proxyPool {
+		item := gin.H{"url": proxyutil.Redact(entry.URL), "assigned": proxyAssigned[entry.URL]}
+		if entry.Label != "" {
+			item["label"] = entry.Label
+		}
+		if entry.Timezone != "" {
+			item["timezone"] = entry.Timezone
+		}
+		proxies = append(proxies, item)
+	}
+	platforms := make([]gin.H, 0, len(platformPool))
+	for _, entry := range platformPool {
+		platforms = append(platforms, gin.H{
+			"os": entry.OS, "arch": entry.Arch, "weight": entry.Weight,
+			"assigned": platformAssigned[entry.OS+"/"+entry.Arch],
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"proxy-pool":               proxies,
+		"platform-pool":            platforms,
+		"stabilize-device-profile": stabilize,
+	})
+}
+
 // PutCredentialLimits replaces the global per-credential limit defaults.
 func (h *Handler) PutCredentialLimits(c *gin.Context) {
 	var body config.CredentialLimits

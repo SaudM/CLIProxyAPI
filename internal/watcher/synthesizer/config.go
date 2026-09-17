@@ -59,7 +59,7 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	// Vertex-compat
 	out = append(out, s.synthesizeVertexCompat(ctx)...)
 
-	applyProxyPoolToAll(out, ctx.Config)
+	applyCredentialPoolsToAll(out, ctx.Config)
 	return out, nil
 }
 

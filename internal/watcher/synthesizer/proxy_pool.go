@@ -2,6 +2,7 @@ package synthesizer
 
 import (
 	"hash/fnv"
+	"math"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -38,10 +39,78 @@ func applyProxyPool(auth *coreauth.Auth, cfg *config.Config) {
 	}
 }
 
-func applyProxyPoolToAll(auths []*coreauth.Auth, cfg *config.Config) {
+// applyCredentialPools applies every automatic per-credential assignment.
+func applyCredentialPools(auth *coreauth.Auth, cfg *config.Config) {
+	applyProxyPool(auth, cfg)
+	applyClaudePlatformPool(auth, cfg)
+}
+
+func applyCredentialPoolsToAll(auths []*coreauth.Auth, cfg *config.Config) {
 	for _, auth := range auths {
-		applyProxyPool(auth, cfg)
+		applyCredentialPools(auth, cfg)
 	}
+}
+
+// applyClaudePlatformPool assigns an (os, arch) platform to a Claude credential that
+// has no device-profile platform of its own, by a weighted rendezvous hash of the
+// credential ID. Explicit device_profile os/arch always wins; the software triple is
+// never touched because it is bound to the measured TLS profile.
+func applyClaudePlatformPool(auth *coreauth.Auth, cfg *config.Config) {
+	if auth == nil || cfg == nil || len(cfg.ClaudeHeaderDefaults.PlatformPool) == 0 {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+		return
+	}
+	if auth.Attributes != nil {
+		if strings.TrimSpace(auth.Attributes[coreauth.AttributeClaudeDeviceOS]) != "" ||
+			strings.TrimSpace(auth.Attributes[coreauth.AttributeClaudeDeviceArch]) != "" {
+			return
+		}
+	}
+	entry, ok := pickClaudePlatformPoolEntry(cfg.ClaudeHeaderDefaults.PlatformPool, poolIdentity(auth))
+	if !ok {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	if entry.OS != "" {
+		auth.Attributes[coreauth.AttributeClaudeDeviceOS] = entry.OS
+	}
+	if entry.Arch != "" {
+		auth.Attributes[coreauth.AttributeClaudeDeviceArch] = entry.Arch
+	}
+	auth.Attributes[coreauth.AttributeClaudeDevicePool] = "true"
+}
+
+// pickClaudePlatformPoolEntry is weighted rendezvous hashing: each entry scores
+// -ln(u)/weight for a per-(identity, entry) uniform u, and the lowest score wins, so
+// the share of credentials landing on an entry is proportional to its weight.
+func pickClaudePlatformPoolEntry(pool []config.ClaudePlatformPoolEntry, identity string) (config.ClaudePlatformPoolEntry, bool) {
+	if len(pool) == 0 || identity == "" {
+		return config.ClaudePlatformPoolEntry{}, false
+	}
+	var best config.ClaudePlatformPoolEntry
+	bestScore := math.Inf(1)
+	found := false
+	for _, entry := range pool {
+		weight := entry.Weight
+		if weight <= 0 {
+			continue
+		}
+		hasher := fnv.New64a()
+		_, _ = hasher.Write([]byte(identity))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(entry.OS + "/" + entry.Arch))
+		// Map the top 53 bits to u in (0, 1] so ln(u) is finite.
+		u := float64((hasher.Sum64()>>11)+1) / float64(uint64(1)<<53)
+		score := -math.Log(u) / float64(weight)
+		if !found || score < bestScore {
+			best, bestScore, found = entry, score, true
+		}
+	}
+	return best, found
 }
 
 func poolIdentity(auth *coreauth.Auth) string {

@@ -382,6 +382,16 @@ func TestCredentialPoolsEndpoint(t *testing.T) {
 		Proxy     []map[string]any `json:"proxy-pool"`
 		Platform  []map[string]any `json:"platform-pool"`
 		Stabilize bool             `json:"stabilize-device-profile"`
+		Defaults  struct {
+			UserAgent      string            `json:"user_agent"`
+			PackageVersion string            `json:"package_version"`
+			RuntimeVersion string            `json:"runtime_version"`
+			OS             string            `json:"os"`
+			Arch           string            `json:"arch"`
+			Timeout        string            `json:"timeout"`
+			Timezone       string            `json:"timezone"`
+			Sources        map[string]string `json:"sources"`
+		} `json:"device-profile-defaults"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -391,5 +401,22 @@ func TestCredentialPoolsEndpoint(t *testing.T) {
 	}
 	if len(payload.Platform) != 2 || payload.Platform[1]["assigned"].(float64) != 1 || payload.Platform[0]["assigned"].(float64) != 0 || payload.Platform[0]["weight"].(float64) != 6 {
 		t.Fatalf("platform payload = %v", payload.Platform)
+	}
+	d := payload.Defaults
+	if d.UserAgent != "claude-cli/2.1.274 (external, cli)" || d.PackageVersion != "0.112.1" || d.RuntimeVersion != "v26.3.0" || d.OS != "MacOS" || d.Arch != "arm64" || d.Timeout != "600" {
+		t.Fatalf("device-profile-defaults = %+v, want the measured built-in baseline", d)
+	}
+	if d.Sources["user_agent"] != "built-in" || d.Sources["timeout"] != "built-in" || d.Timezone == "" {
+		t.Fatalf("device-profile-defaults sources = %v timezone=%q", d.Sources, d.Timezone)
+	}
+	cfg := config.Config{}
+	cfg.ClaudeHeaderDefaults.Timeout = "300"
+	cfg.ClaudeHeaderDefaults.Timezone = "Asia/Tokyo"
+	configured := deviceProfileDefaultsPayload(&cfg)
+	if configured["timeout"] != "300" || configured["timezone"] != "Asia/Tokyo" {
+		t.Fatalf("configured defaults = %v", configured)
+	}
+	if sources := configured["sources"].(gin.H); sources["timeout"] != "config" || sources["timezone"] != "config" || sources["user_agent"] != "built-in" {
+		t.Fatalf("configured sources = %v", sources)
 	}
 }

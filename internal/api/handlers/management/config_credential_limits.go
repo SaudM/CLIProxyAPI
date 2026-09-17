@@ -3,9 +3,11 @@ package management
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 )
@@ -93,7 +95,53 @@ func (h *Handler) GetCredentialPools(c *gin.Context) {
 		"proxy-pool":               proxies,
 		"platform-pool":            platforms,
 		"stabilize-device-profile": stabilize,
+		"device-profile-defaults":  deviceProfileDefaultsPayload(h.cfg),
 	})
+}
+
+// deviceProfileDefaultsPayload reports the global Claude Code baseline a credential
+// without overrides presents, and whether each value comes from the YAML or from the
+// backend's measured built-in, so the panel can echo effective values for empty fields.
+func deviceProfileDefaultsPayload(cfg *config.Config) gin.H {
+	profile := helps.DefaultClaudeDeviceProfile(cfg, nil)
+	var defaults config.ClaudeHeaderDefaults
+	if cfg != nil {
+		defaults = cfg.ClaudeHeaderDefaults
+	}
+	source := func(configured string) string {
+		if strings.TrimSpace(configured) != "" {
+			return "config"
+		}
+		return "built-in"
+	}
+	timeout := strings.TrimSpace(defaults.Timeout)
+	if timeout == "" {
+		timeout = "600"
+	}
+	timezone := strings.TrimSpace(defaults.Timezone)
+	timezoneSource := "config"
+	if timezone == "" {
+		timezone = time.Local.String()
+		timezoneSource = "server-local"
+	}
+	return gin.H{
+		"user_agent":      profile.UserAgent,
+		"package_version": profile.PackageVersion,
+		"runtime_version": profile.RuntimeVersion,
+		"os":              profile.OS,
+		"arch":            profile.Arch,
+		"timeout":         timeout,
+		"timezone":        timezone,
+		"sources": gin.H{
+			"user_agent":      source(defaults.UserAgent),
+			"package_version": source(defaults.PackageVersion),
+			"runtime_version": source(defaults.RuntimeVersion),
+			"os":              source(defaults.OS),
+			"arch":            source(defaults.Arch),
+			"timeout":         source(defaults.Timeout),
+			"timezone":        timezoneSource,
+		},
+	}
 }
 
 // PutCredentialLimits replaces the global per-credential limit defaults.

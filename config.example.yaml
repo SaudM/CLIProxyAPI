@@ -189,7 +189,8 @@ max-retry-interval: 30
 # earliest recovery (bounded by request-retry / max-retry-interval) and otherwise
 # returns HTTP 429 with a Retry-After header.
 #   rpm            requests per credential in a rolling 60 second window, counted at admission
-#   tpm            total tokens (input + output, including cache read/write and reasoning)
+#   tpm            counted tokens: uncached input + cache writes + output (incl. reasoning);
+#                  cache reads are excluded so a cached 150k context does not count on every turn
 #                  per credential in a rolling 60 second window. Tokens are accounted after
 #                  the response, so a single request may overshoot by its own size.
 #   max-concurrent in-flight requests per credential; a slot is held from selection until
@@ -201,7 +202,7 @@ max-retry-interval: 30
 # Explicit 0 (or "" for active-hours) means unlimited.
 #
 # Beyond the per-minute caps, the block shapes each account like one person's usage:
-# - rpd / tpd: requests and tokens per calendar day, counted in the credential's own timezone
+# - rpd / tpd: requests and counted tokens (same basis as tpm) per calendar day, in the credential's own timezone
 #   (proxy-pool timezone, then claude-header-defaults.timezone, then the server clock).
 # - max-sessions: how many distinct downstream sessions (Claude Code session ids; subagents
 #   count with their parent) one credential serves at once. A session stays active for
@@ -218,9 +219,9 @@ max-retry-interval: 30
 #   rpm: 30
 #   tpm: 2000000
 #   max-concurrent: 4
-#   rpd: 600
-#   tpd: 15000000
-#   max-sessions: 4
+#   rpd: 3000
+#   tpd: 40000000
+#   max-sessions: 6
 #   session-window-minutes: 15
 #   active-hours: ""            # e.g. "08:30-01:00" once you run two or more accounts
 #   active-hours-jitter-minutes: 45

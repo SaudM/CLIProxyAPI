@@ -646,21 +646,30 @@ func NewCredentialLimitUsagePlugin(manager *Manager) *CredentialLimitUsagePlugin
 	return &CredentialLimitUsagePlugin{manager: manager}
 }
 
-// HandleUsage records the request's total token count against its auth. It only
+// HandleUsage records the request's counted tokens (cache reads excluded) against
+// its auth. It only
 // takes the limiter lock, so it cannot stall the usage dispatcher.
 func (p *CredentialLimitUsagePlugin) HandleUsage(_ context.Context, record usage.Record) {
 	if p == nil || p.manager == nil || strings.TrimSpace(record.AuthID) == "" {
 		return
 	}
-	p.manager.RecordCredentialTokens(record.AuthID, usageRecordTotalTokens(record))
+	p.manager.RecordCredentialTokens(record.AuthID, usageRecordCountedTokens(record))
 }
 
-func usageRecordTotalTokens(record usage.Record) int64 {
-	if record.Detail.TokenBreakdown.Valid() && record.Detail.TokenBreakdown.TotalTokens > 0 {
-		return record.Detail.TokenBreakdown.TotalTokens
+// usageRecordCountedTokens returns the tokens a request adds to the tpm/tpd
+// budgets: uncached input, cache writes and output. Cache reads are excluded on
+// purpose: Claude Code re-reads its whole cached context on every turn, so
+// counting them makes one small turn look like 100k+ tokens and the budget stops
+// describing what the account actually consumed.
+func usageRecordCountedTokens(record usage.Record) int64 {
+	if breakdown := record.Detail.TokenBreakdown; breakdown.Valid() && breakdown.TotalTokens > 0 {
+		return breakdown.TotalTokens - breakdown.Input.CacheReadTokens
 	}
 	if record.Detail.TotalTokens > 0 {
-		return record.Detail.TotalTokens
+		if counted := record.Detail.TotalTokens - record.Detail.CacheReadTokens; counted > 0 {
+			return counted
+		}
+		return 0
 	}
 	return record.Detail.InputTokens + record.Detail.OutputTokens
 }

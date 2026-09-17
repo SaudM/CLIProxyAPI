@@ -7,6 +7,7 @@ import (
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 func tokyo(t *testing.T) *time.Location {
@@ -231,5 +232,23 @@ func TestCredentialSessionKey_CollapsesSubagentsOntoRootSession(t *testing.T) {
 	}
 	if key := credentialSessionKey(cliproxyexecutor.Options{}, cliproxyexecutor.Request{Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`)}); key != "" {
 		t.Fatalf("hash-derived id counted as a session: %q", key)
+	}
+}
+
+func TestUsageRecordCountedTokensExcludesCacheReads(t *testing.T) {
+	// A Claude Code turn: 2k fresh input, 150k cached context re-read, 3k cache write, 1k output.
+	breakdown := usage.NewSubsetTokenBreakdown(155_000, 150_000, 3_000, 1_000, 0, 156_000)
+	record := usage.Record{Detail: usage.Detail{InputTokens: 2_000, OutputTokens: 1_000, CacheReadTokens: 150_000, CacheCreationTokens: 3_000, TotalTokens: 156_000, TokenBreakdown: breakdown}}
+	if got := usageRecordCountedTokens(record); got != 6_000 {
+		t.Fatalf("counted tokens with breakdown = %d, want 6000 (cache reads excluded)", got)
+	}
+	// Without a valid breakdown the flat detail is used, still net of cache reads.
+	flat := usage.Record{Detail: usage.Detail{InputTokens: 2_000, OutputTokens: 1_000, CacheReadTokens: 150_000, TotalTokens: 153_000}}
+	if got := usageRecordCountedTokens(flat); got != 3_000 {
+		t.Fatalf("counted tokens without breakdown = %d, want 3000", got)
+	}
+	// Bare input/output when nothing else is reported.
+	if got := usageRecordCountedTokens(usage.Record{Detail: usage.Detail{InputTokens: 10, OutputTokens: 5}}); got != 15 {
+		t.Fatalf("bare counted tokens = %d, want 15", got)
 	}
 }

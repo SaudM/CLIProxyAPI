@@ -18,13 +18,14 @@ const MaxCredentialLimitJitterPercent = 50
 type CredentialLimitValues struct {
 	// RPM caps requests per credential in a rolling 60 second window.
 	RPM *int `yaml:"rpm,omitempty" json:"rpm,omitempty"`
-	// TPM caps total tokens (input + output) per credential in a rolling 60 second window.
+	// TPM caps counted tokens (uncached input + cache writes + output; cache reads are
+	// excluded) per credential in a rolling 60 second window.
 	TPM *int `yaml:"tpm,omitempty" json:"tpm,omitempty"`
 	// MaxConcurrent caps in-flight requests per credential.
 	MaxConcurrent *int `yaml:"max-concurrent,omitempty" json:"max-concurrent,omitempty"`
 	// RPD caps requests per credential per calendar day in the credential's timezone.
 	RPD *int `yaml:"rpd,omitempty" json:"rpd,omitempty"`
-	// TPD caps total tokens per credential per calendar day in the credential's timezone.
+	// TPD caps counted tokens (same basis as TPM) per credential per calendar day in the credential's timezone.
 	TPD *int `yaml:"tpd,omitempty" json:"tpd,omitempty"`
 	// MaxSessions caps distinct downstream sessions active on a credential within the session window.
 	MaxSessions *int `yaml:"max-sessions,omitempty" json:"max-sessions,omitempty"`

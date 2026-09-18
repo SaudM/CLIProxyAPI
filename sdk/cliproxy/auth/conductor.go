@@ -176,6 +176,8 @@ type Manager struct {
 	credentialLimits atomic.Pointer[internalconfig.CredentialLimits]
 	// credentialTimezone is the fallback clock for daily budgets and active hours.
 	credentialTimezone atomic.Pointer[string]
+	// credentialWait blocks until a session-bound credential's local limit clears; tests replace it.
+	credentialWait func(ctx context.Context, wait time.Duration) error
 
 	// oauthModelAlias stores global OAuth model alias mappings (alias -> upstream name) keyed by channel.
 	oauthModelAlias atomic.Value
@@ -226,6 +228,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
 		limiter:               newCredentialLimiter(),
+		credentialWait:        waitForCredentialLimit,
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})

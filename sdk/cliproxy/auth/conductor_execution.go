@@ -505,9 +505,20 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			return cliproxyexecutor.Response{}, errPick
 		}
 		// Local rpm/tpm/max_concurrent admission: a refused credential is skipped for this
-		// round without counting as an attempt, so the loop moves on to the next one.
+		// round without counting as an attempt, so the loop moves on to the next one. A
+		// credential the session is already bound to is waited for instead, so the
+		// session does not surface under a second account.
 		lease, blockedUntil, okLease := m.acquireCredentialLease(auth, sessionKey)
 		if !okLease {
+			if !homeMode {
+				if wait, okWait := m.boundCredentialWait(opts, blockedUntil, &limitTracker); okWait {
+					logEntryWithRequestID(ctx).Debugf("credential limit: waiting %s for session-bound credential %s", wait, auth.ID)
+					if errWait := m.credentialWait(ctx, wait); errWait != nil {
+						return cliproxyexecutor.Response{}, errWait
+					}
+					continue
+				}
+			}
 			tried[auth.ID] = struct{}{}
 			limitTracker.noteRefusal(blockedUntil)
 			continue
@@ -1038,8 +1049,18 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 
 		// Local rpm/tpm/max_concurrent admission runs after Home's repeat checks so a
 		// refused credential is excluded from the next dispatch and its slot returned.
+		// Outside Home a credential the session is bound to is waited for instead.
 		lease, blockedUntil, okLease := m.acquireCredentialLease(auth, sessionKey)
 		if !okLease {
+			if selection == nil {
+				if wait, okWait := m.boundCredentialWait(opts, blockedUntil, &limitTracker); okWait {
+					logEntryWithRequestID(ctx).Debugf("credential limit: waiting %s for session-bound credential %s", wait, auth.ID)
+					if errWait := m.credentialWait(ctx, wait); errWait != nil {
+						return nil, errWait
+					}
+					continue
+				}
+			}
 			tried[auth.ID] = struct{}{}
 			limitTracker.noteRefusal(blockedUntil)
 			if selection != nil {

@@ -25,10 +25,11 @@ type configCommit struct {
 }
 
 type routingRuntimeState struct {
-	strategy                 string
-	sessionAffinity          bool
-	sessionAffinityTTL       time.Duration
-	sessionAffinitySubagents bool
+	strategy                   string
+	sessionAffinity            bool
+	sessionAffinityTTL         time.Duration
+	sessionAffinitySubagents   bool
+	sessionAffinityModelScoped bool
 }
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
@@ -59,6 +60,7 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	if state.sessionAffinity && cfg.Routing.SessionAffinitySubagents != nil {
 		state.sessionAffinitySubagents = *cfg.Routing.SessionAffinitySubagents
 	}
+	state.sessionAffinityModelScoped = strings.EqualFold(strings.TrimSpace(cfg.Routing.SessionAffinityScope), "model")
 	return state
 }
 
@@ -74,10 +76,12 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 	}
 	if state.sessionAffinity {
 		subagents := state.sessionAffinitySubagents
+		modelScoped := state.sessionAffinityModelScoped
 		selector = coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
 			Fallback:         selector,
 			TTL:              state.sessionAffinityTTL,
 			SubagentAffinity: &subagents,
+			ModelScoped:      &modelScoped,
 		})
 	}
 	return selector

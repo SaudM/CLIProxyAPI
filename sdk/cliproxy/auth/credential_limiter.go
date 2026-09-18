@@ -681,6 +681,8 @@ type credentialLimitTracker struct {
 	activeLease  *credentialLease
 	refused      bool
 	blockedUntil time.Time
+	// waited is the total time this request has already waited for its session-bound credential.
+	waited time.Duration
 }
 
 // release frees the active lease, if any. Safe to call repeatedly.
@@ -745,5 +747,50 @@ func isAuthUnavailablePickError(err error) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// boundCredentialWait decides whether a request whose session is bound to the refused
+// credential should wait for that credential instead of migrating to another one.
+// Migrating would send the same session (and its cached context) under a second
+// account, so a bound session waits as long as the limit clears within
+// max-retry-interval; the total wait per request is capped by the same setting.
+// Zero max-retry-interval keeps the legacy behaviour of moving on immediately.
+func (m *Manager) boundCredentialWait(opts cliproxyexecutor.Options, blockedUntil time.Time, tracker *credentialLimitTracker) (time.Duration, bool) {
+	if m == nil || tracker == nil || opts.Metadata == nil {
+		return 0, false
+	}
+	if bound, _ := opts.Metadata[cliproxyexecutor.SessionAffinityBoundMetadataKey].(bool); !bound {
+		return 0, false
+	}
+	_, _, maxWait := m.retrySettings()
+	if maxWait <= 0 {
+		return 0, false
+	}
+	wait := credentialLimitConcurrencyRetry
+	if !blockedUntil.IsZero() {
+		if until := blockedUntil.Sub(m.limiter.now()); until > wait {
+			wait = until
+		}
+	}
+	if tracker.waited+wait > maxWait {
+		return 0, false
+	}
+	tracker.waited += wait
+	return wait, true
+}
+
+// waitForCredentialLimit sleeps for wait or until ctx is done.
+func waitForCredentialLimit(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }

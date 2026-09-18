@@ -338,6 +338,12 @@ routing:
   # for maximum parallel concurrency.
   # Ignored when routing.session-affinity is false.
   session-affinity-subagents: true
+  # What one binding covers. "session" (default) keeps every model a session uses — main
+  # turns, Haiku helper calls, subagents — on one credential, so a conversation never
+  # surfaces under a second account. "model" restores per-model bindings.
+  # A session-bound credential that is over a local limit (rpm/tpm/concurrency) is waited
+  # for, up to max-retry-interval, rather than the session migrating to another credential.
+  session-affinity-scope: "session"
 
 # Codex provider behavior.
 codex:

@@ -93,3 +93,16 @@ func TestForkDefaultsForMissingAndEmptyConfigFiles(t *testing.T) {
 		t.Fatal("DefaultClaudePlatformPool must return a fresh, equal slice each call")
 	}
 }
+
+func TestRoutingSessionAffinityScopeParses(t *testing.T) {
+	cfg, errParse := ParseConfigBytes([]byte("routing:\n  session-affinity-scope: \"model\"\n"))
+	if errParse != nil {
+		t.Fatalf("ParseConfigBytes() error = %v", errParse)
+	}
+	if cfg.Routing.SessionAffinityScope != "model" {
+		t.Fatalf("scope = %q", cfg.Routing.SessionAffinityScope)
+	}
+	if absent, _ := ParseConfigBytes([]byte("host: x\n")); absent.Routing.SessionAffinityScope != "" {
+		t.Fatalf("absent scope = %q, want empty (session)", absent.Routing.SessionAffinityScope)
+	}
+}

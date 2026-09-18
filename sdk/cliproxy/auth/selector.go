@@ -397,6 +397,11 @@ func authWeight(auth *Auth) int64 {
 	return credentialweight.Default
 }
 
+// sessionHomeKey is the model-agnostic binding key of one session.
+func sessionHomeKey(provider, sessionID string) string {
+	return provider + "::" + sessionID + "::*"
+}
+
 func canonicalModelKey(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -914,6 +919,10 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+	// modelScoped keeps the legacy behaviour where a session is bound per model, so one
+	// conversation's main-model turns, helper calls and subagents may land on different
+	// credentials. Off by default: every model of a session shares one binding.
+	modelScoped bool
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -921,6 +930,8 @@ type SessionAffinityConfig struct {
 	Fallback         Selector
 	TTL              time.Duration
 	SubagentAffinity *bool
+	// ModelScoped restores per-model bindings; nil or false binds the whole session.
+	ModelScoped *bool
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -943,11 +954,16 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 	if cfg.SubagentAffinity != nil {
 		subagentAffinity = *cfg.SubagentAffinity
 	}
+	modelScoped := false
+	if cfg.ModelScoped != nil {
+		modelScoped = *cfg.ModelScoped
+	}
 	return &SessionAffinitySelector{
 		fallback:         cfg.Fallback,
 		cache:            NewSessionCache(cfg.TTL),
 		matcher:          cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
 		subagentAffinity: subagentAffinity,
+		modelScoped:      modelScoped,
 	}
 }
 
@@ -977,6 +993,8 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
+	delete(opts.Metadata, cliproxyexecutor.SessionAffinityBoundMetadataKey)
+	markBound := func() { opts.Metadata[cliproxyexecutor.SessionAffinityBoundMetadataKey] = true }
 
 	// Explicit harness identities are absolute authority. The LCP matcher is only
 	// consulted when no header, body, or execution-session identity is present.
@@ -1046,18 +1064,34 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if fallbackID != "" && fallbackID != primaryID {
 		fallbackKey = provider + "::" + fallbackID + "::" + modelKey
 	}
-	bind := func(authID string) {
-		if fallbackKey != "" && !isSubagent && !isFork {
-			s.cache.SetAliases(authID, cacheKey, fallbackKey)
-		} else {
-			s.cache.Set(cacheKey, authID)
+	// The session-home key is model-agnostic: every model a session uses shares it,
+	// so a conversation's helper calls and subagents stay on the credential its main
+	// turns use. Only the session's own home key is written; a child never rebinds
+	// its parent.
+	homeKey := ""
+	parentHomeKey := ""
+	if !s.modelScoped {
+		homeKey = sessionHomeKey(provider, primaryID)
+		if fallbackID != "" && fallbackID != primaryID {
+			parentHomeKey = sessionHomeKey(provider, fallbackID)
 		}
+	}
+	bind := func(authID string) {
+		keys := []string{cacheKey}
+		if homeKey != "" {
+			keys = append(keys, homeKey)
+		}
+		if fallbackKey != "" && !isSubagent && !isFork {
+			keys = append(keys, fallbackKey)
+		}
+		s.cache.SetAliases(authID, keys...)
 	}
 
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				bind(auth.ID)
+				markBound()
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
 			}
@@ -1075,12 +1109,26 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return auth, nil
 	}
 
+	if homeKey != "" {
+		if cachedAuthID, ok := s.cache.GetAndRefresh(homeKey); ok {
+			for _, auth := range available {
+				if auth.ID == cachedAuthID {
+					bind(auth.ID)
+					markBound()
+					entry.Infof("session-affinity: session home hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+					return auth, nil
+				}
+			}
+		}
+	}
+
 	if fallbackKey != "" {
 		if cachedAuthID, ok := s.cache.Get(fallbackKey); ok {
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
 						bind(auth.ID)
+						markBound()
 						if isFork {
 							entry.Infof("session-affinity: fork cache hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 						} else {
@@ -1088,6 +1136,19 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 						}
 						return auth, nil
 					}
+				}
+			}
+		}
+	}
+
+	if parentHomeKey != "" && (!isSubagent || s.subagentAffinity) {
+		if cachedAuthID, ok := s.cache.Get(parentHomeKey); ok {
+			for _, auth := range available {
+				if auth.ID == cachedAuthID {
+					bind(auth.ID)
+					markBound()
+					entry.Infof("session-affinity: parent home hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
+					return auth, nil
 				}
 			}
 		}
@@ -1499,9 +1560,19 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		return
 	}
 
-	s.cache.CompareAndDelete(cacheKey, res.AuthID)
+	if s.modelScoped {
+		s.cache.CompareAndDelete(cacheKey, res.AuthID)
+		if fallbackKey != "" {
+			s.cache.CompareAndDelete(fallbackKey, res.AuthID)
+		}
+		return
+	}
+	// Session scope: the failed credential is forgotten for the whole session, home
+	// alias included, so the next pick of any model reselects instead of following
+	// the session home back to it.
+	s.cache.CompareAndDeleteGroup(cacheKey, res.AuthID)
 	if fallbackKey != "" {
-		s.cache.CompareAndDelete(fallbackKey, res.AuthID)
+		s.cache.CompareAndDeleteGroup(fallbackKey, res.AuthID)
 	}
 }
 

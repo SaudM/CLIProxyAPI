@@ -76,6 +76,9 @@ const (
 	SessionAffinityProviderMetadataKey = "session_affinity_provider"
 	// SessionAffinityModelMetadataKey carries the model used during session affinity selection.
 	SessionAffinityModelMetadataKey = "session_affinity_model"
+	// SessionAffinityBoundMetadataKey is set to true by the session-affinity selector when
+	// the pick came from an existing session binding rather than a fresh selection.
+	SessionAffinityBoundMetadataKey = "session_affinity_bound"
 )
 
 // Request encapsulates the translated payload that will be sent to a provider executor.

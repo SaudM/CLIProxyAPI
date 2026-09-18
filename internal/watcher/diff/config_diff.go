@@ -192,6 +192,12 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Routing.Strategy != newCfg.Routing.Strategy {
 		changes = append(changes, fmt.Sprintf("routing.strategy: %s -> %s", oldCfg.Routing.Strategy, newCfg.Routing.Strategy))
 	}
+	if oldCfg.Routing.SessionAffinityTTL != newCfg.Routing.SessionAffinityTTL {
+		changes = append(changes, fmt.Sprintf("routing.session-affinity-ttl: %q -> %q", oldCfg.Routing.SessionAffinityTTL, newCfg.Routing.SessionAffinityTTL))
+	}
+	if oldCfg.Routing.SessionAffinityScope != newCfg.Routing.SessionAffinityScope {
+		changes = append(changes, fmt.Sprintf("routing.session-affinity-scope: %q -> %q", oldCfg.Routing.SessionAffinityScope, newCfg.Routing.SessionAffinityScope))
+	}
 	if !reflect.DeepEqual(oldCfg.Payload, newCfg.Payload) {
 		changes = appendPayloadConfigChanges(changes, oldCfg.Payload, newCfg.Payload)
 	}

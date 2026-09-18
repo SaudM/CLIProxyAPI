@@ -366,6 +366,12 @@ type RoutingConfig struct {
 	// When false, subagents are distributed across the credential pool via the fallback selector.
 	// Default: true. Ignored when SessionAffinity is false.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+
+	// SessionAffinityScope selects what one binding covers. "session" (default) keeps every
+	// model a session uses — main turns, helper calls, subagents — on one credential.
+	// "model" restores the legacy per-model bindings, which can spread one session over
+	// several credentials.
+	SessionAffinityScope string `yaml:"session-affinity-scope,omitempty" json:"session-affinity-scope,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

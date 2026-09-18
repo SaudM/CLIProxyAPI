@@ -355,6 +355,24 @@ func (c *SessionCache) CompareAndDelete(sessionID, expectedAuthID string) bool {
 
 // Invalidate removes a specific session binding without allowing another alias
 // in the same group to recreate it on its next refresh.
+// CompareAndDeleteGroup removes the whole alias group that sessionID belongs to when
+// it is bound to expectedAuthID, so every identifier of that session (all models, the
+// session-home alias, conversation aliases) is forgotten at once.
+func (c *SessionCache) CompareAndDeleteGroup(sessionID, expectedAuthID string) bool {
+	if c == nil || sessionID == "" || expectedAuthID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureInitializedLocked()
+	entry, ok := c.entries[sessionID]
+	if !ok || entry.authID != expectedAuthID {
+		return false
+	}
+	c.removeAliasGroupLocked(entry)
+	return true
+}
+
 func (c *SessionCache) Invalidate(sessionID string) {
 	if c == nil || sessionID == "" {
 		return

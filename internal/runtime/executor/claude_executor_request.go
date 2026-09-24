@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ const (
 	claudeExtendedCacheTTLBeta       = "extended-cache-ttl-2025-04-11"
 	claudePromptCachingEvictBeta     = "prompt-caching-evict-2026-05-12"
 	claudeCacheDiagnosisBeta         = "cache-diagnosis-2026-04-07"
+	claudePromptCachingScopeBeta     = "prompt-caching-scope-2026-01-05"
 	claudeRedactThinkingBeta         = "redact-thinking-2026-02-12"
 	claudeAFKModeBeta                = "afk-mode-2026-01-31"
 )
@@ -74,7 +76,7 @@ var claudeCodeCLIConstantBetas = []string{
 	claudeRedactThinkingBeta,
 	"thinking-token-count-2026-05-13",
 	"context-management-2025-06-27",
-	"prompt-caching-scope-2026-01-05",
+	claudePromptCachingScopeBeta,
 }
 
 // claudeCodeTrailingBetas are caller-supplied betas that real Claude Code emits
@@ -133,7 +135,7 @@ func isManagedClaudeBeta(beta string) bool {
 }
 
 // claudeCodeCLIBetas assembles the Anthropic-Beta baseline the way Claude Code
-// 2.1.280 does: the list is per-request, not a fixed string. requested holds the
+// 2.1.281 does: the list is per-request, not a fixed string. requested holds the
 // betas the caller asked for, which decide the capability flags below.
 //
 // Verified against api.anthropic.com with native 2.1.258 captures on interactive,
@@ -142,26 +144,34 @@ func isManagedClaudeBeta(beta string) bool {
 // mid-conversation-tool-changes immediately after mid-conversation-system on the
 // same non-legacy models. The betas named in issue #6054 are feature-gated in
 // that binary, so they are emitted only for the model capability or body shape
-// that actually sends them, in the same relative order:
+// that actually sends them, in the same relative order. Claude Code 2.1.281
+// (measured 2026-09-24 on the sdk-cli path with API-key auth across 16
+// model/thinking combinations) pins the model gates: Haiku appends claude-code
+// last, the 3.5 generation carries no thinking or context-management betas,
+// redact-thinking drops out when thinking is disabled, Sonnet never pairs
+// tool-changes, and effort follows the model catalog whether thinking is on or
+// off. That client also sent fallback-credit unprompted on Opus 5 and Fable
+// requests, which an OAuth 2.1.274 capture did not; it is account-dependent,
+// so it is forwarded when the caller sends it rather than synthesized:
 //
-//	 1 claude-code-20250219
+//	 1 claude-code-20250219              Haiku models append it last instead
 //	 2 oauth-2025-04-20                  OAuth credentials only
 //	 3 context-1m-2025-08-07             [1m] model variants only
-//	 4 interleaved-thinking-2025-05-14
-//	 5 redact-thinking-2026-02-12        cli entrypoint, no thinking.display
-//	 6 thinking-token-count-2026-05-13
-//	 7 context-management-2025-06-27
+//	 4 interleaved-thinking-2025-05-14   thinking-capable generations (3.7+)
+//	 5 redact-thinking-2026-02-12        cli entrypoint, thinking not disabled, no thinking.display
+//	 6 thinking-token-count-2026-05-13   thinking-capable generations (3.7+)
+//	 7 context-management-2025-06-27     thinking-capable generations (3.7+)
 //	 8 prompt-caching-scope-2026-01-05
 //	 9 mid-conversation-system-2026-04-07  models accepting a role=system turn
 //	10 per-turn-control-2026-07-01        opus-5-5 and fable-5-1, or requested
 //	11 timing-2026-09-09                  per-turn timing body, or requested
-//	12 mid-conversation-tool-changes-2026-07-01  same models as mid-conversation-system
+//	12 mid-conversation-tool-changes-2026-07-01  mid-conversation models except Sonnet, or requested
 //	13 inline-tools-2026-09-15            inline tool_addition blocks, or requested
 //	14 advisor-tool-2026-03-01            requests declaring advisor tools or requesting advisor beta
 //	15 advanced-tool-use-2025-11-20       requests using tool search or another advanced tool-use feature
 //	16 mid-conversation-system-clear-at-2026-08-21  messages with clear_at, or requested
 //	17 dangerous-tool-use-2026-09-03      safeguards body, or requested
-//	18 effort-2025-11-24                  effort-supporting models with active thinking
+//	18 effort-2025-11-24                  Opus 4.5+, Sonnet 4.6+ and the 5.x families, thinking on or off
 //	19 server-side-fallback-2026-06-01    requests with fallbacks or requested
 //	20 fallback-credit-2026-06-01         requests with fallback tokens, fallbacks, or requested
 //	21 structured-outputs-2025-12-15      structured output requests
@@ -178,16 +188,25 @@ func isManagedClaudeBeta(beta string) bool {
 // policy for unknown and future model IDs.
 func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool) string {
 	betas := make([]string, 0, len(claudeCodeCLIConstantBetas)+len(claudeCodeTrailingBetas)+10)
-	betas = append(betas, claudeCodeBeta)
+	model := gjson.GetBytes(body, "model").String()
+	// Haiku requests carry claude-code at the end of the list (2.1.281).
+	haikuModel := isClaudeHaikuModel(model)
+	if !haikuModel {
+		betas = append(betas, claudeCodeBeta)
+	}
 	if oauthToken {
 		betas = append(betas, claudeOAuthBeta)
 	}
 	if requested[claudeContext1MBeta] {
 		betas = append(betas, claudeContext1MBeta)
 	}
-	redactThinking := !claudeThinkingDisplaySet(body)
+	redactThinking := !claudeThinkingDisabled(body) && !claudeThinkingDisplaySet(body)
+	thinkingBetas := !claudeModelPredatesThinking(model)
 	for _, beta := range claudeCodeCLIConstantBetas {
 		if beta == claudeRedactThinkingBeta && !redactThinking {
+			continue
+		}
+		if !thinkingBetas && beta != claudePromptCachingScopeBeta {
 			continue
 		}
 		betas = append(betas, beta)
@@ -200,7 +219,9 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 		if claudeIncludePerTurnTiming(body, requested) {
 			betas = append(betas, claudePerTurnTimingBeta)
 		}
-		betas = append(betas, claudeMidConvToolChangesBeta)
+		if requested[claudeMidConvToolChangesBeta] || claudeModelHasMidConvToolChanges(model) {
+			betas = append(betas, claudeMidConvToolChangesBeta)
+		}
 		if claudeIncludeInlineTools(body, requested) {
 			betas = append(betas, claudeInlineToolsBeta)
 		}
@@ -277,11 +298,83 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	if diagnostics := gjson.GetBytes(body, "diagnostics"); diagnostics.IsObject() {
 		betas = append(betas, claudeCacheDiagnosisBeta)
 	}
+	if haikuModel {
+		betas = append(betas, claudeCodeBeta)
+	}
 	return strings.Join(betas, ",")
 }
 
 func isClaudeHaikuModel(model string) bool {
 	return strings.Contains(strings.ToLower(model), "haiku")
+}
+
+// claudeModelVersion splits a Claude model ID into family and generation:
+// "claude-opus-4-5-20251101" is opus 4.5, "claude-3-5-haiku-20241022" is haiku
+// 3.5, "claude-sonnet-5" is sonnet 5.0. Date suffixes, "latest" and a [1m] tag
+// are ignored. ok is false when no numeric generation is present.
+func claudeModelVersion(model string) (family string, major, minor int, ok bool) {
+	model = strings.TrimSuffix(claudeCanonicalModel(model), "[1m]")
+	numbers := make([]int, 0, 2)
+	for _, part := range strings.Split(strings.TrimPrefix(model, "claude-"), "-") {
+		number, err := strconv.Atoi(part)
+		switch {
+		case err != nil:
+			if family == "" {
+				family = part
+			}
+		case number >= 1000:
+			// Date suffix such as 20251101.
+		case len(numbers) < 2:
+			numbers = append(numbers, number)
+		}
+	}
+	if family == "" || len(numbers) == 0 {
+		return family, 0, 0, false
+	}
+	if len(numbers) > 1 {
+		minor = numbers[1]
+	}
+	return family, numbers[0], minor, true
+}
+
+// claudeModelSupportsEffort mirrors the 2.1.281 catalog: Opus 4.5+, Sonnet 4.6+
+// and the 5.x families send effort-2025-11-24; Haiku, Sonnet 4.5 and older, and
+// the 3.x line do not. Unknown shapes stay optimistic like the rest of the cloak.
+func claudeModelSupportsEffort(model string) bool {
+	if isClaudeHaikuModel(model) {
+		return false
+	}
+	family, major, minor, ok := claudeModelVersion(model)
+	if !ok {
+		return true
+	}
+	switch family {
+	case "opus":
+		return major > 4 || (major == 4 && minor >= 5)
+	case "sonnet":
+		return major > 4 || (major == 4 && minor >= 6)
+	}
+	return major >= 4
+}
+
+// claudeModelPredatesThinking reports the 3.5-and-older generation, which Claude
+// Code 2.1.281 sends without the thinking and context-management betas.
+func claudeModelPredatesThinking(model string) bool {
+	_, major, minor, ok := claudeModelVersion(model)
+	return ok && (major < 3 || (major == 3 && minor < 7))
+}
+
+// claudeModelHasMidConvToolChanges reports models that pair
+// mid-conversation-tool-changes-2026-07-01 with mid-conversation-system: every
+// role=system model except the Sonnet line (2.1.281 omits it on sonnet-5).
+func claudeModelHasMidConvToolChanges(model string) bool {
+	family, _, _, ok := claudeModelVersion(model)
+	return !ok || family != "sonnet"
+}
+
+// claudeThinkingDisabled reports an explicit {"type":"disabled"} thinking object.
+func claudeThinkingDisabled(body []byte) bool {
+	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "disabled")
 }
 
 func claudeCanonicalModel(model string) string {
@@ -368,22 +461,18 @@ func claudeIncludeMidConvClearAt(body []byte, requested map[string]bool) bool {
 	return found
 }
 
+// claudeRequestSupportsEffort follows the 2.1.281 model catalog: effort-2025-11-24
+// goes out on every request to an effort-capable model whether thinking is
+// enabled, adaptive or disabled (measured on opus-4-8 and sonnet-5 with thinking
+// disabled). Probe and helper requests never carry it.
 func claudeRequestSupportsEffort(body []byte, requested map[string]bool) bool {
 	if len(body) > 0 {
 		if helps.IsClaudeProbeOrHelperRequest(body) {
 			return false
 		}
-		model := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
-		if isClaudeHaikuModel(model) {
+		if !claudeModelSupportsEffort(gjson.GetBytes(body, "model").String()) {
 			return false
 		}
-		thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
-		if thinkingType == "disabled" {
-			return false
-		}
-	}
-	if requested[claudeEffortBeta] {
-		return true
 	}
 	return true
 }
@@ -1182,7 +1271,7 @@ func applyClaudeHeadersWithNativeProfile(
 		}
 	}
 	applyBetaHeader := func() {
-		// Enforce strict native Claude Code 2.1.280 model & turn beta gating:
+		// Enforce strict native Claude Code 2.1.281 model & turn beta gating:
 		if !claudeRequestSupportsEffort(body, nil) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 		}
@@ -1273,7 +1362,8 @@ func applyClaudeHeadersWithNativeProfile(
 	identityHeader("Anthropic-Version", "2023-06-01")
 	identityHeader("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	identityHeader("X-App", "cli")
-	// Values below match Claude Code 2.1.280 / @anthropic-ai/sdk 0.112.1.
+	// Values below match Claude Code 2.1.281 / @anthropic-ai/sdk 0.112.1 (measured
+	// 2026-09-24; 2.1.273 through 2.1.280 report the same package and runtime).
 	identityHeader("X-Stainless-Retry-Count", "0")
 	identityHeader("X-Stainless-Runtime", "node")
 	identityHeader("X-Stainless-Lang", "js")

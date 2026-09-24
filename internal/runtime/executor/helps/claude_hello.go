@@ -14,7 +14,7 @@ import (
 // ClaudeCodeHelloUserAgent is the User-Agent the native Claude Code binary's
 // connectivity probe carries: Bun's default fetch identity for the Bun release
 // bundled with the advertised Claude Code versions (2.1.273 / 2.1.274 ship Bun
-// 1.4.3, captured 2026-09-18).
+// 1.4.3, captured 2026-09-18; 2.1.281 still does, captured 2026-09-24).
 const ClaudeCodeHelloUserAgent = "Bun/1.4.3"
 
 // claudeCodeHelloPath is probed with HEAD at every Claude Code start against the

@@ -157,7 +157,9 @@ func newClaudeCodeTLSConfig(host string) *tls.Config {
 
 // claudeCodeTLSClientHelloSpec reproduces the deterministic ClientHello emitted by
 // the native Claude Code 2.1.274 binary (Bun 1.4.3 / BoringSSL) for its fetch
-// transport, captured 2026-09-18 on macOS arm64 against a local TLS-terminating
+// transport (2.1.281 re-measured 2026-09-24: byte-identical cipher, extension,
+// group and key-share layout, still no session resumption),
+// captured 2026-09-18 on macOS arm64 against a local TLS-terminating
 // listener and cross-checked against a tcpdump of the same client talking to a
 // remote host. Compared with the 2.1.220 Node/OpenSSL capture the only wire
 // differences are the X25519MLKEM768 hybrid group (first in supported_groups and

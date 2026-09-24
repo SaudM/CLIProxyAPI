@@ -3,6 +3,7 @@ package helps
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +24,9 @@ type ClaudeClientVersionStat struct {
 }
 
 // claudeClientVersionRegistry remembers which native Claude Code versions each credential
-// served in the last 24 hours. The fingerprint report uses it to warn when clients run a
-// version other than the credential baseline: their User-Agent is rewritten to the
-// baseline while the system prompt keeps the client's own text.
+// served in the last 24 hours. The fingerprint report uses it to flag clients whose
+// User-Agent is rewritten to the credential baseline (older releases and other release
+// lines) and to point out newer patch releases that pass through as themselves.
 type claudeClientVersionRegistry struct {
 	mu     sync.Mutex
 	byAuth map[string]map[string]*ClaudeClientVersionStat
@@ -42,6 +43,32 @@ func ClaudeClientVersionFromUserAgent(userAgent string) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("%d.%d.%d", version.major, version.minor, version.patch), true
+}
+
+// ClaudeClientVersionPassesThrough reports whether a downstream Claude Code version keeps
+// its own User-Agent upstream: patch releases at or above the baseline in the baseline's
+// major.minor line do (plausibleClaudeCLIVersion); older releases and other lines are
+// rewritten to the baseline. Both arguments are bare "major.minor.patch" strings.
+func ClaudeClientVersionPassesThrough(version, baseline string) bool {
+	candidate, okCandidate := parseClaudeVersionString(version)
+	base, okBase := parseClaudeVersionString(baseline)
+	return okCandidate && okBase && plausibleClaudeCLIVersion(candidate, base)
+}
+
+func parseClaudeVersionString(version string) (claudeCLIVersion, bool) {
+	parts := strings.Split(strings.TrimSpace(version), ".")
+	if len(parts) != 3 {
+		return claudeCLIVersion{}, false
+	}
+	numbers := make([]int, 3)
+	for i, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil || number < 0 {
+			return claudeCLIVersion{}, false
+		}
+		numbers[i] = number
+	}
+	return claudeCLIVersion{major: numbers[0], minor: numbers[1], patch: numbers[2]}, true
 }
 
 // RecordClaudeClientVersion notes that a confirmed native client with userAgent was

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultClaudeFingerprintUserAgent      = "claude-cli/2.1.280 (external, cli)"
+	defaultClaudeFingerprintUserAgent      = "claude-cli/2.1.281 (external, cli)"
 	defaultClaudeFingerprintPackageVersion = "0.112.1"
 	defaultClaudeFingerprintRuntimeVersion = "v26.3.0"
 	defaultClaudeFingerprintOS             = "MacOS"
@@ -614,7 +614,7 @@ func ApplyClaudeDeviceProfileHeaders(r *http.Request, profile ClaudeDeviceProfil
 	r.Header.Set("X-Stainless-Arch", profile.Arch)
 }
 
-// DefaultClaudeVersion returns the version string (e.g. "2.1.280") from the
+// DefaultClaudeVersion returns the version string (e.g. "2.1.281") from the
 // global baseline device profile. Request paths must use CredentialClaudeVersion
 // so the billing cc_version matches the User-Agent sent for that credential.
 func DefaultClaudeVersion(cfg *config.Config) string {
@@ -628,7 +628,7 @@ func CredentialClaudeVersion(cfg *config.Config, auth *cliproxyauth.Auth) string
 	if version, ok := parseClaudeCLIVersion(profile.UserAgent); ok {
 		return strconv.Itoa(version.major) + "." + strconv.Itoa(version.minor) + "." + strconv.Itoa(version.patch)
 	}
-	return "2.1.280"
+	return "2.1.281"
 }
 
 func ApplyClaudeDefaultDeviceProfileHeaders(r *http.Request, cfg *config.Config, auth *cliproxyauth.Auth) {

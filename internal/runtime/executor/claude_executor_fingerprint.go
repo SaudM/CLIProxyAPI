@@ -160,25 +160,38 @@ func (e *ClaudeExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string
 }
 
 // claudeClientVersionsReport lists the native Claude Code versions this credential served in
-// the last 24 hours and warns when one differs from the baseline the credential presents.
+// the last 24 hours. Releases older than the baseline (or from another release line) get
+// their User-Agent rewritten to the baseline, which is flagged; newer patch releases in the
+// baseline's line pass through with their own User-Agent and only prompt a re-measure.
 func claudeClientVersionsReport(report map[string]any, versions []helps.ClaudeClientVersionStat, baselineUserAgent string) map[string]any {
 	baseline, _ := helps.ClaudeClientVersionFromUserAgent(baselineUserAgent)
 	items := make([]map[string]any, 0, len(versions))
-	mismatched := make([]string, 0)
+	rewritten := make([]string, 0)
+	newer := make([]string, 0)
 	for _, stat := range versions {
+		passthrough := helps.ClaudeClientVersionPassesThrough(stat.Version, baseline)
 		items = append(items, map[string]any{
-			"version":    stat.Version,
-			"requests":   stat.Requests,
-			"first_seen": stat.FirstSeen,
-			"last_seen":  stat.LastSeen,
-			"baseline":   stat.Version == baseline,
+			"version":     stat.Version,
+			"requests":    stat.Requests,
+			"first_seen":  stat.FirstSeen,
+			"last_seen":   stat.LastSeen,
+			"baseline":    stat.Version == baseline,
+			"passthrough": passthrough,
 		})
-		if stat.Version != baseline {
-			mismatched = append(mismatched, fmt.Sprintf("%s (%d requests)", stat.Version, stat.Requests))
+		entry := fmt.Sprintf("%s (%d requests)", stat.Version, stat.Requests)
+		switch {
+		case stat.Version == baseline:
+		case passthrough:
+			newer = append(newer, entry)
+		default:
+			rewritten = append(rewritten, entry)
 		}
 	}
-	if len(mismatched) > 0 {
-		fingerprintAddWarning(report, fmt.Sprintf("downstream Claude Code %s differs from the credential baseline %s: their User-Agent is rewritten to the baseline while their system prompt keeps the client's own text; align client versions or pin this credential to one version", strings.Join(mismatched, ", "), baseline))
+	if len(rewritten) > 0 {
+		fingerprintAddWarning(report, fmt.Sprintf("downstream Claude Code %s is older than the credential baseline %s or from another release line: their User-Agent is rewritten to the baseline while their system prompt keeps the client's own text; upgrade those clients or pin this credential to one version", strings.Join(rewritten, ", "), baseline))
+	}
+	if len(newer) > 0 {
+		fingerprintAddWarning(report, fmt.Sprintf("downstream Claude Code %s is newer than the credential baseline %s and is passed through with its own User-Agent; measure that release and raise the baseline so cloaked traffic on this credential presents the same version", strings.Join(newer, ", "), baseline))
 	}
 	return map[string]any{"baseline": baseline, "window_hours": 24, "versions": items}
 }

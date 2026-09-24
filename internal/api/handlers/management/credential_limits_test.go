@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
@@ -403,8 +404,10 @@ func TestCredentialPoolsEndpoint(t *testing.T) {
 		t.Fatalf("platform payload = %v", payload.Platform)
 	}
 	d := payload.Defaults
-	if d.UserAgent != "claude-cli/2.1.274 (external, cli)" || d.PackageVersion != "0.112.1" || d.RuntimeVersion != "v26.3.0" || d.OS != "MacOS" || d.Arch != "arm64" || d.Timeout != "600" {
-		t.Fatalf("device-profile-defaults = %+v, want the measured built-in baseline", d)
+	// The software triple follows the built-in baseline so a baseline bump does not touch this test.
+	wantUserAgent := "claude-cli/" + helps.DefaultClaudeVersion(nil) + " (external, cli)"
+	if d.UserAgent != wantUserAgent || d.PackageVersion != "0.112.1" || d.RuntimeVersion != "v26.3.0" || d.OS != "MacOS" || d.Arch != "arm64" || d.Timeout != "600" {
+		t.Fatalf("device-profile-defaults = %+v, want the measured built-in baseline %s", d, wantUserAgent)
 	}
 	if d.Sources["user_agent"] != "built-in" || d.Sources["timeout"] != "built-in" || d.Timezone == "" {
 		t.Fatalf("device-profile-defaults sources = %v timezone=%q", d.Sources, d.Timezone)

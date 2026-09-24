@@ -479,6 +479,7 @@ func plausibleClaudeCodeUserAgentForCredential(userAgent string, cfg *config.Con
 	}
 	candidate, okCandidate := parseClaudeCLIVersion(userAgent)
 	baseline, okBaseline := parseClaudeCLIVersion(credentialClaudeDeviceProfile(cfg, auth).UserAgent)
+	// Patch releases (>= baseline.patch) within the release line preserve native passthrough.
 	return okCandidate && okBaseline && plausibleClaudeCLIVersion(candidate, baseline)
 }
 

@@ -44,13 +44,13 @@ type ClaudeSoftwareTuple struct {
 	RuntimeVersion string
 }
 
-// knownClaudeSoftwareTuples lists measured Claude Code releases. Both entries are
-// native Bun 1.4.3 / BoringSSL builds that report the same SDK and runtime
-// versions and emit the same TLS ClientHello (captured 2026-09-18), so the
-// inference-plane uTLS spec is valid for either. Extend only from a real
-// capture; a tuple no release ever produced is a detectable inconsistency, not
-// diversity.
+// knownClaudeSoftwareTuples lists measured Claude Code releases. All entries are
+// native Bun / BoringSSL builds that report the same SDK and runtime versions:
+// 2.1.273/2.1.274 were captured here on 2026-09-18, 2.1.280 is the upstream
+// measurement of 2026-09-23. Extend only from a real capture; a tuple no
+// release ever produced is a detectable inconsistency, not diversity.
 var knownClaudeSoftwareTuples = []ClaudeSoftwareTuple{
+	{CLIVersion: "2.1.280", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"},
 	{CLIVersion: "2.1.274", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"},
 	{CLIVersion: "2.1.273", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"},
 }

@@ -1,8 +1,8 @@
 package executor
 
 import (
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/buildinfo"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 // DescribeFingerprint reports the identity Kimi requests carry for this credential.

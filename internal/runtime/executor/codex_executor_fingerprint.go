@@ -3,7 +3,7 @@ package executor
 import (
 	"strings"
 
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 // DescribeFingerprint reports the identity Codex requests carry for this credential.
@@ -38,9 +38,6 @@ func (e *CodexExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string]
 	}
 	if accountID := fingerprintMetadataString(auth, "account_id"); accountID != "" {
 		client["chatgpt_account_id"] = cliproxyauth.MaskIdentifier(accountID)
-	}
-	if e.cfg != nil && e.cfg.Codex.IdentityConfuse {
-		client["identity_confuse"] = true
 	}
 	report["client"] = client
 	report["session"] = "derived-or-downstream"

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
 const boundWaitSession = "44444444-4444-4444-4444-444444444444"

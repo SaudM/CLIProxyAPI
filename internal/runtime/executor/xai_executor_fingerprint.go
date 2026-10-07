@@ -1,7 +1,7 @@
 package executor
 
 import (
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 // DescribeFingerprint reports the identity xAI requests carry for this credential.

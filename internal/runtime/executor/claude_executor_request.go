@@ -12,21 +12,20 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
-	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/buildinfo"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -59,7 +58,6 @@ const (
 	claudeExtendedCacheTTLBeta       = "extended-cache-ttl-2025-04-11"
 	claudePromptCachingEvictBeta     = "prompt-caching-evict-2026-05-12"
 	claudeCacheDiagnosisBeta         = "cache-diagnosis-2026-04-07"
-	claudePromptCachingScopeBeta     = "prompt-caching-scope-2026-01-05"
 	claudeRedactThinkingBeta         = "redact-thinking-2026-02-12"
 	claudeAFKModeBeta                = "afk-mode-2026-01-31"
 )
@@ -76,7 +74,7 @@ var claudeCodeCLIConstantBetas = []string{
 	claudeRedactThinkingBeta,
 	"thinking-token-count-2026-05-13",
 	"context-management-2025-06-27",
-	claudePromptCachingScopeBeta,
+	"prompt-caching-scope-2026-01-05",
 }
 
 // claudeCodeTrailingBetas are caller-supplied betas that real Claude Code emits
@@ -135,7 +133,7 @@ func isManagedClaudeBeta(beta string) bool {
 }
 
 // claudeCodeCLIBetas assembles the Anthropic-Beta baseline the way Claude Code
-// 2.1.281 does: the list is per-request, not a fixed string. requested holds the
+// 2.1.280 does: the list is per-request, not a fixed string. requested holds the
 // betas the caller asked for, which decide the capability flags below.
 //
 // Verified against api.anthropic.com with native 2.1.258 captures on interactive,
@@ -144,34 +142,26 @@ func isManagedClaudeBeta(beta string) bool {
 // mid-conversation-tool-changes immediately after mid-conversation-system on the
 // same non-legacy models. The betas named in issue #6054 are feature-gated in
 // that binary, so they are emitted only for the model capability or body shape
-// that actually sends them, in the same relative order. Claude Code 2.1.281
-// (measured 2026-09-24 on the sdk-cli path with API-key auth across 16
-// model/thinking combinations) pins the model gates: Haiku appends claude-code
-// last, the 3.5 generation carries no thinking or context-management betas,
-// redact-thinking drops out when thinking is disabled, Sonnet never pairs
-// tool-changes, and effort follows the model catalog whether thinking is on or
-// off. That client also sent fallback-credit unprompted on Opus 5 and Fable
-// requests, which an OAuth 2.1.274 capture did not; it is account-dependent,
-// so it is forwarded when the caller sends it rather than synthesized:
+// that actually sends them, in the same relative order:
 //
-//	 1 claude-code-20250219              Haiku models append it last instead
+//	 1 claude-code-20250219
 //	 2 oauth-2025-04-20                  OAuth credentials only
 //	 3 context-1m-2025-08-07             [1m] model variants only
-//	 4 interleaved-thinking-2025-05-14   thinking-capable generations (3.7+)
-//	 5 redact-thinking-2026-02-12        cli entrypoint, thinking not disabled, no thinking.display
-//	 6 thinking-token-count-2026-05-13   thinking-capable generations (3.7+)
-//	 7 context-management-2025-06-27     thinking-capable generations (3.7+)
+//	 4 interleaved-thinking-2025-05-14
+//	 5 redact-thinking-2026-02-12        cli entrypoint, no thinking.display
+//	 6 thinking-token-count-2026-05-13
+//	 7 context-management-2025-06-27
 //	 8 prompt-caching-scope-2026-01-05
 //	 9 mid-conversation-system-2026-04-07  models accepting a role=system turn
 //	10 per-turn-control-2026-07-01        opus-5-5 and fable-5-1, or requested
 //	11 timing-2026-09-09                  per-turn timing body, or requested
-//	12 mid-conversation-tool-changes-2026-07-01  mid-conversation models except Sonnet, or requested
+//	12 mid-conversation-tool-changes-2026-07-01  same models as mid-conversation-system
 //	13 inline-tools-2026-09-15            inline tool_addition blocks, or requested
 //	14 advisor-tool-2026-03-01            requests declaring advisor tools or requesting advisor beta
 //	15 advanced-tool-use-2025-11-20       requests using tool search or another advanced tool-use feature
 //	16 mid-conversation-system-clear-at-2026-08-21  messages with clear_at, or requested
 //	17 dangerous-tool-use-2026-09-03      safeguards body, or requested
-//	18 effort-2025-11-24                  Opus 4.5+, Sonnet 4.6+ and the 5.x families, thinking on or off
+//	18 effort-2025-11-24                  effort-supporting models with active thinking
 //	19 server-side-fallback-2026-06-01    requests with fallbacks or requested
 //	20 fallback-credit-2026-06-01         requests with fallback tokens, fallbacks, or requested
 //	21 structured-outputs-2025-12-15      structured output requests
@@ -188,25 +178,16 @@ func isManagedClaudeBeta(beta string) bool {
 // policy for unknown and future model IDs.
 func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool) string {
 	betas := make([]string, 0, len(claudeCodeCLIConstantBetas)+len(claudeCodeTrailingBetas)+10)
-	model := gjson.GetBytes(body, "model").String()
-	// Haiku requests carry claude-code at the end of the list (2.1.281).
-	haikuModel := isClaudeHaikuModel(model)
-	if !haikuModel {
-		betas = append(betas, claudeCodeBeta)
-	}
+	betas = append(betas, claudeCodeBeta)
 	if oauthToken {
 		betas = append(betas, claudeOAuthBeta)
 	}
 	if requested[claudeContext1MBeta] {
 		betas = append(betas, claudeContext1MBeta)
 	}
-	redactThinking := !claudeThinkingDisabled(body) && !claudeThinkingDisplaySet(body)
-	thinkingBetas := !claudeModelPredatesThinking(model)
+	redactThinking := !claudeThinkingDisplaySet(body)
 	for _, beta := range claudeCodeCLIConstantBetas {
 		if beta == claudeRedactThinkingBeta && !redactThinking {
-			continue
-		}
-		if !thinkingBetas && beta != claudePromptCachingScopeBeta {
 			continue
 		}
 		betas = append(betas, beta)
@@ -219,7 +200,7 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 		if claudeIncludePerTurnTiming(body, requested) {
 			betas = append(betas, claudePerTurnTimingBeta)
 		}
-		if requested[claudeMidConvToolChangesBeta] || claudeModelHasMidConvToolChanges(model) {
+		if !isClaudeSonnet5Model(gjson.GetBytes(body, "model").String()) {
 			betas = append(betas, claudeMidConvToolChangesBeta)
 		}
 		if claudeIncludeInlineTools(body, requested) {
@@ -269,7 +250,8 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 		}
 	}
 	thinkingType := gjson.GetBytes(body, "thinking.type").String()
-	if requested[claudeThinkingBindingBeta] || gjson.GetBytes(body, "thinking.block_binding").Exists() {
+	if requested[claudeThinkingBindingBeta] || gjson.GetBytes(body, "thinking.block_binding").Exists() ||
+		(claudeModelUsesProgressDisplay(gjson.GetBytes(body, "model").String()) && thinkingType == "adaptive") {
 		betas = append(betas, claudeThinkingBindingBeta)
 	}
 	if !isProbeOrHelper && thinkingType != "disabled" && (requested[claudeThinkingDisplayUpdatesBeta] || claudeThinkingDisplayUpdates(body)) {
@@ -298,83 +280,11 @@ func claudeCodeCLIBetas(body []byte, requested map[string]bool, oauthToken bool)
 	if diagnostics := gjson.GetBytes(body, "diagnostics"); diagnostics.IsObject() {
 		betas = append(betas, claudeCacheDiagnosisBeta)
 	}
-	if haikuModel {
-		betas = append(betas, claudeCodeBeta)
-	}
 	return strings.Join(betas, ",")
 }
 
 func isClaudeHaikuModel(model string) bool {
 	return strings.Contains(strings.ToLower(model), "haiku")
-}
-
-// claudeModelVersion splits a Claude model ID into family and generation:
-// "claude-opus-4-5-20251101" is opus 4.5, "claude-3-5-haiku-20241022" is haiku
-// 3.5, "claude-sonnet-5" is sonnet 5.0. Date suffixes, "latest" and a [1m] tag
-// are ignored. ok is false when no numeric generation is present.
-func claudeModelVersion(model string) (family string, major, minor int, ok bool) {
-	model = strings.TrimSuffix(claudeCanonicalModel(model), "[1m]")
-	numbers := make([]int, 0, 2)
-	for _, part := range strings.Split(strings.TrimPrefix(model, "claude-"), "-") {
-		number, err := strconv.Atoi(part)
-		switch {
-		case err != nil:
-			if family == "" {
-				family = part
-			}
-		case number >= 1000:
-			// Date suffix such as 20251101.
-		case len(numbers) < 2:
-			numbers = append(numbers, number)
-		}
-	}
-	if family == "" || len(numbers) == 0 {
-		return family, 0, 0, false
-	}
-	if len(numbers) > 1 {
-		minor = numbers[1]
-	}
-	return family, numbers[0], minor, true
-}
-
-// claudeModelSupportsEffort mirrors the 2.1.281 catalog: Opus 4.5+, Sonnet 4.6+
-// and the 5.x families send effort-2025-11-24; Haiku, Sonnet 4.5 and older, and
-// the 3.x line do not. Unknown shapes stay optimistic like the rest of the cloak.
-func claudeModelSupportsEffort(model string) bool {
-	if isClaudeHaikuModel(model) {
-		return false
-	}
-	family, major, minor, ok := claudeModelVersion(model)
-	if !ok {
-		return true
-	}
-	switch family {
-	case "opus":
-		return major > 4 || (major == 4 && minor >= 5)
-	case "sonnet":
-		return major > 4 || (major == 4 && minor >= 6)
-	}
-	return major >= 4
-}
-
-// claudeModelPredatesThinking reports the 3.5-and-older generation, which Claude
-// Code 2.1.281 sends without the thinking and context-management betas.
-func claudeModelPredatesThinking(model string) bool {
-	_, major, minor, ok := claudeModelVersion(model)
-	return ok && (major < 3 || (major == 3 && minor < 7))
-}
-
-// claudeModelHasMidConvToolChanges reports models that pair
-// mid-conversation-tool-changes-2026-07-01 with mid-conversation-system: every
-// role=system model except the Sonnet line (2.1.281 omits it on sonnet-5).
-func claudeModelHasMidConvToolChanges(model string) bool {
-	family, _, _, ok := claudeModelVersion(model)
-	return !ok || family != "sonnet"
-}
-
-// claudeThinkingDisabled reports an explicit {"type":"disabled"} thinking object.
-func claudeThinkingDisabled(body []byte) bool {
-	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "disabled")
 }
 
 func claudeCanonicalModel(model string) string {
@@ -387,9 +297,51 @@ func claudeCanonicalModel(model string) string {
 
 // claudeModelHasPerTurnEffort reports models whose 2.1.280 catalog capability
 // per_turn_effort puts per-turn-control-2026-07-01 on every first-party request.
-func claudeModelHasPerTurnEffort(model string) bool {
+func isClaudeOpus55Model(model string) bool {
 	model = claudeCanonicalModel(model)
-	return strings.HasPrefix(model, "claude-opus-5-5") || strings.HasPrefix(model, "claude-fable-5-1")
+	return model == "claude-opus-5-5" || strings.HasPrefix(model, "claude-opus-5-5[")
+}
+
+func isClaudeSonnet55Model(model string) bool {
+	model = claudeCanonicalModel(model)
+	return model == "claude-sonnet-5-5" || strings.HasPrefix(model, "claude-sonnet-5-5-") || strings.HasPrefix(model, "claude-sonnet-5-5[")
+}
+
+func isClaudeSonnet5Model(model string) bool {
+	model = claudeCanonicalModel(model)
+	if isClaudeSonnet55Model(model) {
+		return false
+	}
+	return model == "claude-sonnet-5" || strings.HasPrefix(model, "claude-sonnet-5-") || strings.HasPrefix(model, "claude-sonnet-5[")
+}
+
+// claudeModelUsesProgressDisplay reports the 2.1.280 interactive CLI models that
+// send thinking.display=updates unless the caller already chose a display mode.
+func claudeModelUsesProgressDisplay(model string) bool {
+	return isClaudeOpus55Model(model) || isClaudeFable51Model(model) || isClaudeSonnet5Model(model) || isClaudeSonnet55Model(model)
+}
+
+// applyClaudeCloakThinkingDisplay fills the latest CLI display only when the
+// translated caller did not choose one. An explicit summarized or omitted value
+// from Responses, Chat, or Gemini stays untouched.
+func applyClaudeCloakThinkingDisplay(body []byte, callerOwned bool) []byte {
+	if callerOwned || len(body) == 0 || gjson.GetBytes(body, "thinking.display").Exists() {
+		return body
+	}
+	if !claudeModelUsesProgressDisplay(gjson.GetBytes(body, "model").String()) {
+		return body
+	}
+	switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String())) {
+	case "adaptive", "enabled":
+	default:
+		return body
+	}
+	body, _ = sjson.SetBytes(body, "thinking.display", "updates")
+	return body
+}
+
+func claudeModelHasPerTurnEffort(model string) bool {
+	return isClaudeOpus55Model(model) || strings.HasPrefix(claudeCanonicalModel(model), "claude-fable-5-1")
 }
 
 // claudeModelHasPerTurnTiming reports models whose catalog lists per_turn_timing.
@@ -447,7 +399,7 @@ func claudeIncludeInlineTools(body []byte, requested map[string]bool) bool {
 }
 
 func claudeIncludeMidConvClearAt(body []byte, requested map[string]bool) bool {
-	if requested[claudeMidConvSystemClearAtBeta] {
+	if requested[claudeMidConvSystemClearAtBeta] || claudeModelUsesProgressDisplay(gjson.GetBytes(body, "model").String()) {
 		return true
 	}
 	found := false
@@ -461,18 +413,22 @@ func claudeIncludeMidConvClearAt(body []byte, requested map[string]bool) bool {
 	return found
 }
 
-// claudeRequestSupportsEffort follows the 2.1.281 model catalog: effort-2025-11-24
-// goes out on every request to an effort-capable model whether thinking is
-// enabled, adaptive or disabled (measured on opus-4-8 and sonnet-5 with thinking
-// disabled). Probe and helper requests never carry it.
 func claudeRequestSupportsEffort(body []byte, requested map[string]bool) bool {
 	if len(body) > 0 {
 		if helps.IsClaudeProbeOrHelperRequest(body) {
 			return false
 		}
-		if !claudeModelSupportsEffort(gjson.GetBytes(body, "model").String()) {
+		model := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
+		if isClaudeHaikuModel(model) {
 			return false
 		}
+		thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+		if thinkingType == "disabled" {
+			return false
+		}
+	}
+	if requested[claudeEffortBeta] {
+		return true
 	}
 	return true
 }
@@ -1068,7 +1024,7 @@ func claudeCredentialUsesOAuth(auth *cliproxyauth.Auth, apiKey string) bool {
 	return !hasAPIKeyAttr
 }
 
-func copyClaudeCallerFingerprintHeaders(dst, src http.Header) {
+func copyClaudeCallerFingerprintHeaders(dst, src http.Header, confirmedClaudeCode bool) {
 	if dst == nil || src == nil {
 		return
 	}
@@ -1082,6 +1038,9 @@ func copyClaudeCallerFingerprintHeaders(dst, src http.Header) {
 			!strings.HasPrefix(lowerName, "x-claude-remote-") &&
 			lowerName != "x-client-app" &&
 			lowerName != "x-anthropic-additional-protection" {
+			continue
+		}
+		if !confirmedClaudeCode && (strings.HasPrefix(lowerName, "x-claude-code-") || strings.HasPrefix(lowerName, "x-claude-remote-")) {
 			continue
 		}
 		dst.Del(name)
@@ -1209,6 +1168,12 @@ func applyClaudeHeadersWithNativeProfile(
 				baseBetas = withClaudeOAuthCredentialBetas(baseBetas, includeExtendedCacheTTL)
 			}
 		}
+	} else if preserveCallerFingerprint && useOAuthBetas {
+		if countTokens {
+			baseBetas = withClaudeCountTokensOAuthBeta(baseBetas)
+		} else {
+			baseBetas = withClaudeOAuthCredentialBetas(baseBetas, false)
+		}
 	}
 	if preserveCallerFingerprint && advisorNeeded {
 		baseBetas = withClaudeAdvisorToolBeta(baseBetas)
@@ -1271,12 +1236,12 @@ func applyClaudeHeadersWithNativeProfile(
 		}
 	}
 	applyBetaHeader := func() {
-		// Enforce strict native Claude Code 2.1.281 model & turn beta gating:
+		// Enforce strict native Claude Code 2.1.280 model & turn beta gating:
 		if !claudeRequestSupportsEffort(body, nil) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 		}
 		reqProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(body)
-		if reqProbeOrHelper {
+		if reqProbeOrHelper && !helperProfile {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeServerSideFallbackBeta)
 			baseBetas = withoutClaudeBeta(baseBetas, claudeThinkingDisplayUpdatesBeta)
 			baseBetas = withoutClaudeBeta(baseBetas, claudeExtendedCacheTTLBeta)
@@ -1292,7 +1257,7 @@ func applyClaudeHeadersWithNativeProfile(
 			baseBetas = withClaudeExtendedCacheTTLBeta(baseBetas)
 		}
 		reqModel := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
-		if isClaudeHaikuModel(reqModel) && !gjson.GetBytes(body, "fallbacks").Exists() {
+		if isClaudeHaikuModel(reqModel) && !gjson.GetBytes(body, "fallbacks").Exists() && !helperProfile {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeServerSideFallbackBeta)
 		}
 
@@ -1311,7 +1276,7 @@ func applyClaudeHeadersWithNativeProfile(
 			defaultAccept = "text/event-stream"
 			defaultAcceptEncoding = "identity"
 		}
-		copyClaudeCallerFingerprintHeaders(r.Header, incomingHeaders)
+		copyClaudeCallerFingerprintHeaders(r.Header, incomingHeaders, confirmedClaudeCode)
 		misc.EnsureHeader(r.Header, incomingHeaders, "Anthropic-Version", "2023-06-01")
 		misc.EnsureHeader(r.Header, incomingHeaders, "Accept", defaultAccept)
 		misc.EnsureHeader(r.Header, incomingHeaders, "Accept-Encoding", defaultAcceptEncoding)
@@ -1321,6 +1286,16 @@ func applyClaudeHeadersWithNativeProfile(
 		// as CPA instead: honest about the hop, and not a fabricated client.
 		misc.EnsureHeader(r.Header, incomingHeaders, "User-Agent", "CLIProxyAPI/"+buildinfo.Version)
 		applyBetaHeader()
+		sessionID := ""
+		for _, candidate := range sessionIDs {
+			if candidate = strings.TrimSpace(candidate); candidate != "" {
+				sessionID = candidate
+				break
+			}
+		}
+		if sessionID != "" {
+			r.Header.Set("X-Claude-Code-Session-Id", sessionID)
+		}
 		var attrs map[string]string
 		if auth != nil {
 			attrs = auth.Attributes
@@ -1362,8 +1337,7 @@ func applyClaudeHeadersWithNativeProfile(
 	identityHeader("Anthropic-Version", "2023-06-01")
 	identityHeader("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	identityHeader("X-App", "cli")
-	// Values below match Claude Code 2.1.281 / @anthropic-ai/sdk 0.112.1 (measured
-	// 2026-09-24; 2.1.273 through 2.1.280 report the same package and runtime).
+	// Values below match Claude Code 2.1.280 / @anthropic-ai/sdk 0.112.1.
 	identityHeader("X-Stainless-Retry-Count", "0")
 	identityHeader("X-Stainless-Runtime", "node")
 	identityHeader("X-Stainless-Lang", "js")
@@ -1414,6 +1388,21 @@ func applyClaudeHeadersWithNativeProfile(
 			r.Header.Set(hdr, val)
 		}
 	}
+	// Gateway hints are caller-owned software state. Preserve them only for a
+	// confirmed native client; an unconfirmed caller must not spoof its class.
+	if confirmedClaudeCode {
+		for _, hdr := range []string{
+			"X-Claude-Code-Request-Class",
+			"X-Claude-Code-Agent-Type",
+			"X-Claude-Code-Prev-Tool-Durations",
+			"X-Claude-Code-Compaction",
+			"X-Claude-Code-Context-Compacted",
+		} {
+			if val := helps.HeaderValueCaseInsensitive(incomingHeaders, hdr); val != "" {
+				r.Header.Set(hdr, val)
+			}
+		}
+	}
 	// Per-request UUID, matches Claude Code's x-client-request-id for first-party API.
 	// identityHeader prefers the incoming value for a confirmed client, so a confirmed
 	// helper keeps its own native request ID and this fresh UUID only covers a caller
@@ -1447,9 +1436,6 @@ func applyClaudeHeadersWithNativeProfile(
 		r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	}
 	applyTransportNegotiation()
-	if confirmedClaudeCode && auth != nil {
-		helps.RecordClaudeClientVersion(auth.ID, incomingHeaders.Get("User-Agent"))
-	}
 	// Confirmed Claude Code requests may contribute their real software profile.
 	// Unconfirmed clients always receive the CLI baseline instead of being
 	// allowed to populate or reuse another client's software profile.
@@ -1457,10 +1443,10 @@ func applyClaudeHeadersWithNativeProfile(
 		if confirmedClaudeCode {
 			helps.ApplyClaudeDeviceProfileHeaders(r, deviceProfile)
 		} else {
-			helps.ApplyClaudeDefaultDeviceProfileHeaders(r, cfg, auth)
+			helps.ApplyClaudeDefaultDeviceProfileHeaders(r, cfg)
 		}
 	} else {
-		helps.ApplyClaudeLegacyDeviceHeaders(r, incomingHeaders, cfg, auth, confirmedClaudeCode)
+		helps.ApplyClaudeLegacyDeviceHeaders(r, incomingHeaders, cfg, confirmedClaudeCode)
 	}
 	var attrs map[string]string
 	if auth != nil {
@@ -1694,7 +1680,8 @@ func restoreClaudeOAuthToolNamesFromStreamLine(line []byte, reverseMap map[strin
 // typed Anthropic tools remain unchanged.
 //
 // It operates on tools[].name, tool_choice.name, and all declared
-// tool_use/tool_reference references in messages.
+// tool_use/tool_reference references in messages, including mid-conversation
+// tool_addition/tool_removal blocks.
 //
 // The returned map is keyed on the upstream name and maps to the client-supplied
 // original name. Callers MUST pass this map to the reverse
@@ -1951,6 +1938,18 @@ func remapOAuthToolNamesWithBatchedEdits(body []byte, mcpAliases claudeMCPAliasO
 							return true
 						})
 					}
+				case "tool_addition", "tool_removal":
+					if namePath := claudeToolChangeNamePath(part); namePath != "" {
+						nameResult := part.Get(namePath)
+						changeToolName := nameResult.String()
+						if newName, renamed := rewriteName(changeToolName); renamed {
+							if !appendStringEdit(nameResult, newName) {
+								validOffsets = false
+								return false
+							}
+							recordRename(changeToolName, newName)
+						}
+					}
 				}
 				return validOffsets
 			})
@@ -2194,6 +2193,15 @@ func remapOAuthToolNamesWithOptionsLegacy(body []byte, mcpAliases claudeMCPAlias
 							return true
 						})
 					}
+				case "tool_addition", "tool_removal":
+					if namePath := claudeToolChangeNamePath(part); namePath != "" {
+						changeToolName := part.Get(namePath).String()
+						if newName, renamed := rewriteName(changeToolName); renamed {
+							changePath := fmt.Sprintf("messages.%d.content.%d.%s", msgIndex.Int(), contentIndex.Int(), namePath)
+							body, _ = sjson.SetBytes(body, changePath, newName)
+							recordRename(changeToolName, newName)
+						}
+					}
 				}
 				return true
 			})
@@ -2202,6 +2210,27 @@ func remapOAuthToolNamesWithOptionsLegacy(body []byte, mcpAliases claudeMCPAlias
 	}
 
 	return body, reverseMap
+}
+
+// claudeToolChangeNamePath returns the path, relative to a mid-conversation
+// tool_addition or tool_removal block, of the tool name that must carry the
+// same MCP alias as tools[]. A tool_reference names a tool declared in tools[];
+// upstream rejects a reference to an undeclared name. A tool_addition can
+// instead carry a tool_definition (inline-tools-2026-09-15) whose definition is
+// a tools[] entry; redefining a declared custom tool replaces it only under the
+// same upstream name. Server tool definitions and MCP connector references keep
+// their names, matching the tools[] rewrite.
+func claudeToolChangeNamePath(part gjson.Result) string {
+	switch part.Get("tool.type").String() {
+	case "tool_reference":
+		return "tool.name"
+	case "tool_definition":
+		if part.Get("type").String() != "tool_addition" || helps.IsClaudeServerToolType(part.Get("tool.definition.type").String()) {
+			return ""
+		}
+		return "tool.definition.name"
+	}
+	return ""
 }
 
 type claudeMCPAliasParts struct {
@@ -2447,7 +2476,8 @@ func (resolver claudeMCPAliasResolver) resolve(name string) (string, bool, error
 		}
 	}
 
-	return "", false, claudeMCPAliasRestoreError{fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: no unique request-local match", name)}
+	log.Warnf("claude oauth mcp alias: cannot restore tool name %q: no unique request-local match; forwarding it unchanged", name)
+	return "", false, nil
 }
 
 // reverseRemapOAuthToolNames reverses the tool name mapping for non-stream responses

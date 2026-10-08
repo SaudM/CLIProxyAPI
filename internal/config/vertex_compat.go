@@ -56,6 +56,9 @@ type VertexCompatKey struct {
 	// CredentialLimitValues optionally overrides the global credential-limits for this entry.
 	// Nil fields inherit the global value; 0 disables the limit; negative values are rejected.
 	CredentialLimitValues `yaml:",inline"`
+
+	// Interactions optionally enables native Vertex Interactions API routing for this key.
+	Interactions *bool `yaml:"interactions,omitempty" json:"interactions,omitempty"`
 }
 
 func (k VertexCompatKey) GetAPIKey() string   { return k.APIKey }

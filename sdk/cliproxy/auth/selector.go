@@ -397,9 +397,21 @@ func authWeight(auth *Auth) int64 {
 	return credentialweight.Default
 }
 
-// sessionHomeKey is the model-agnostic binding key of one session.
-func sessionHomeKey(provider, sessionID string) string {
-	return provider + "::" + sessionID + "::*"
+// sessionSchedulingProviders lists the scheduling providers the candidates belong to,
+// restricted to the request's provider unless it is the mixed pool.
+func sessionSchedulingProviders(provider string, candidates []*Auth) map[string]struct{} {
+	providers := make(map[string]struct{})
+	schedulingProvider := canonicalSchedulingProvider(provider)
+	for _, candidate := range candidates {
+		candidateProvider := canonicalSchedulingProvider(executorKeyFromAuth(candidate))
+		if candidateProvider == "" {
+			candidateProvider = schedulingProvider
+		}
+		if schedulingProvider == "mixed" || candidateProvider == schedulingProvider {
+			providers[candidateProvider] = struct{}{}
+		}
+	}
+	return providers
 }
 
 func canonicalModelKey(model string) string {
@@ -922,7 +934,131 @@ type SessionAffinitySelector struct {
 	// modelScoped keeps the legacy behaviour where a session is bound per model, so one
 	// conversation's main-model turns, helper calls and subagents may land on different
 	// credentials. Off by default: every model of a session shares one binding.
-	modelScoped bool
+	modelScoped       bool
+	rebindOnQuotaOnly bool
+}
+
+const (
+	// SessionAffinityRebindOnAny rebinds the session on any credential-attributed failure (default).
+	SessionAffinityRebindOnAny = "any"
+	// SessionAffinityRebindOnQuota preserves the existing session binding across transient failures
+	// and only rebinds on quota, auth, model-support, or permanent unavailability.
+	SessionAffinityRebindOnQuota = "quota"
+)
+
+func normalizeSessionAffinityRebindOn(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case SessionAffinityRebindOnQuota:
+		return SessionAffinityRebindOnQuota
+	default:
+		return SessionAffinityRebindOnAny
+	}
+}
+
+type sessionAffinityTransientAuthIDsKey struct{}
+
+func withSessionAffinityTransientAuthIDs(ctx context.Context, authIDs map[string]struct{}) context.Context {
+	if len(authIDs) == 0 {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, sessionAffinityTransientAuthIDsKey{}, authIDs)
+}
+
+func sessionAffinityTransientAuthIDsFromContext(ctx context.Context) map[string]struct{} {
+	if ctx == nil {
+		return nil
+	}
+	authIDs, _ := ctx.Value(sessionAffinityTransientAuthIDsKey{}).(map[string]struct{})
+	return authIDs
+}
+
+func shouldRebindSessionAffinityOnError(err *Error) bool {
+	if err == nil || shouldSkipCredentialCooldown(err) {
+		return false
+	}
+	if isModelSupportResultError(err) || isCloudflareChallengeResultError(err) || isInvalidGrantResultError(err) || isCreditBalanceTooLowResultError(err) {
+		return true
+	}
+	switch statusCodeFromResult(err) {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAuthBlockedByQuotaOrAuthForModel(auth *Auth, model string, now time.Time) bool {
+	if auth == nil {
+		return true
+	}
+	if auth.Disabled || auth.Status == StatusDisabled {
+		return true
+	}
+	if hasUnauthorizedAuthFailure(auth) {
+		return true
+	}
+	if exp, ok := auth.AccessTokenExpirationTime(); ok && !exp.IsZero() && !exp.After(now) {
+		return true
+	}
+	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && (auth.Quota.NextRecoverAt.IsZero() || auth.Quota.NextRecoverAt.After(now)) {
+		return true
+	}
+	if model != "" && len(auth.ModelStates) > 0 {
+		modelKey := canonicalModelKey(model)
+		for stateModel, state := range auth.ModelStates {
+			if state == nil || canonicalModelKey(stateModel) != modelKey {
+				continue
+			}
+			if state.Status == StatusDisabled {
+				return true
+			}
+			if isStateBlockedByQuotaOrAuth(state.Unavailable, state.Quota, state.NextRetryAfter, state.LastError, now) {
+				return true
+			}
+		}
+		return false
+	}
+	quota := auth.Quota
+	if len(auth.ModelStates) > 0 && auth.Quota.Reason != "credential_quota" && !auth.Unavailable {
+		quota.Exceeded = false
+	}
+	return isStateBlockedByQuotaOrAuth(auth.Unavailable, quota, auth.NextRetryAfter, auth.LastError, now)
+}
+
+func isStateBlockedByQuotaOrAuth(unavailable bool, quota QuotaState, nextRetryAfter time.Time, lastErr *Error, now time.Time) bool {
+	if quota.Exceeded && (quota.NextRecoverAt.IsZero() || quota.NextRecoverAt.After(now)) {
+		return true
+	}
+	blocked, _, _ := availabilityBlock(unavailable, quota.Exceeded, nextRetryAfter, quota.NextRecoverAt, now)
+	if !blocked {
+		return lastErr != nil && shouldRebindSessionAffinityOnError(lastErr)
+	}
+	if lastErr != nil {
+		return shouldRebindSessionAffinityOnError(lastErr)
+	}
+	return nextRetryAfter.IsZero() && quota.NextRecoverAt.IsZero()
+}
+
+func (s *SessionAffinitySelector) shouldPreserveBindingWhenUnavailable(ctx context.Context, candidates []*Auth, model, authID string, now time.Time) bool {
+	if s == nil || !s.rebindOnQuotaOnly || authID == "" {
+		return false
+	}
+	if ctx != nil {
+		if validated, _ := ctx.Value(prevalidatedAuthCandidatesKey{}).(bool); validated {
+			transientAuthIDs := sessionAffinityTransientAuthIDsFromContext(ctx)
+			_, ok := transientAuthIDs[authID]
+			return ok
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate != nil && candidate.ID == authID {
+			return !isAuthBlockedByQuotaOrAuthForModel(candidate, model, now)
+		}
+	}
+	return false
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -932,6 +1068,7 @@ type SessionAffinityConfig struct {
 	SubagentAffinity *bool
 	// ModelScoped restores per-model bindings; nil or false binds the whole session.
 	ModelScoped *bool
+	RebindOn    string
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -958,12 +1095,14 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 	if cfg.ModelScoped != nil {
 		modelScoped = *cfg.ModelScoped
 	}
+	rebindOnQuotaOnly := normalizeSessionAffinityRebindOn(cfg.RebindOn) == SessionAffinityRebindOnQuota
 	return &SessionAffinitySelector{
-		fallback:         cfg.Fallback,
-		cache:            NewSessionCache(cfg.TTL),
-		matcher:          cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
-		subagentAffinity: subagentAffinity,
-		modelScoped:      modelScoped,
+		fallback:          cfg.Fallback,
+		cache:             NewSessionCache(cfg.TTL),
+		matcher:           cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
+		subagentAffinity:  subagentAffinity,
+		modelScoped:       modelScoped,
+		rebindOnQuotaOnly: rebindOnQuotaOnly,
 	}
 }
 
@@ -1066,33 +1205,36 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if fallbackID != "" && fallbackID != primaryID {
 		fallbackKey = provider + "::" + fallbackID + "::" + modelKey
 	}
-	// The session-home key is model-agnostic: every model a session uses shares it,
-	// so a conversation's helper calls and subagents stay on the credential its main
-	// turns use. Only the session's own home key is written; a child never rebinds
-	// its parent.
-	homeKey := ""
-	parentHomeKey := ""
-	if !s.modelScoped {
-		homeKey = sessionHomeKey(provider, primaryID)
-		if fallbackID != "" && fallbackID != primaryID {
-			parentHomeKey = sessionHomeKey(provider, fallbackID)
-		}
-	}
-	bind := func(authID string) {
+	// Session scope (fork): every model a session uses - main turns, helper calls,
+	// subagents - stays on one credential. Lookups go through the session registry
+	// (latestSessionAuth), which is TTL- and lifecycle-aware and keyed per provider, so
+	// no extra alias is written and a child never rebinds its parent.
+	providers := sessionSchedulingProviders(provider, available)
+	bind := func(authID string, recordSelection bool) {
 		keys := []string{cacheKey}
-		if homeKey != "" {
-			keys = append(keys, homeKey)
-		}
 		if fallbackKey != "" && !isSubagent && !isFork {
 			keys = append(keys, fallbackKey)
 		}
-		s.cache.SetAliases(authID, keys...)
+		if !recordSelection {
+			s.cache.SetAliases(authID, keys...)
+			return
+		}
+		bindingProvider := canonicalSchedulingProvider(provider)
+		for _, candidate := range auths {
+			if candidate != nil && candidate.ID == authID {
+				if candidateProvider := canonicalSchedulingProvider(executorKeyFromAuth(candidate)); candidateProvider != "" {
+					bindingProvider = candidateProvider
+				}
+				break
+			}
+		}
+		s.cache.setSessionAliases(authID, bindingProvider, primaryID, keys...)
 	}
 
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
-				bind(auth.ID)
+				bind(auth.ID, true)
 				markBound()
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
@@ -1106,18 +1248,35 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		if auth == nil {
 			return nil, nil
 		}
-		bind(auth.ID)
+		if s.shouldPreserveBindingWhenUnavailable(ctx, availabilityCandidates, model, cachedAuthID, now) {
+			bind(cachedAuthID, false)
+			entry.Infof("session-affinity: cache hit but auth transiently unavailable, failover without rebinding | session=%s bound_auth=%s failover_auth=%s provider=%s model=%s", truncateSessionID(primaryID), cachedAuthID, auth.ID, provider, model)
+			return auth, nil
+		}
+		bind(auth.ID, true)
 		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 		return auth, nil
 	}
 
-	if homeKey != "" {
-		if cachedAuthID, ok := s.cache.GetAndRefresh(homeKey); ok {
+	if !s.modelScoped {
+		if sessionAuthID := s.cache.latestSessionAuth(primaryID, providers); sessionAuthID != "" {
 			for _, auth := range available {
-				if auth.ID == cachedAuthID {
-					bind(auth.ID)
+				if auth.ID == sessionAuthID {
+					bind(auth.ID, true)
 					markBound()
 					entry.Infof("session-affinity: session home hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+					return auth, nil
+				}
+			}
+		}
+	}
+
+	if isSubagent && s.subagentAffinity && isGuardianRequest(opts.Headers) {
+		if parentAuthID := s.cache.latestSessionAuth(fallbackID, providers); parentAuthID != "" {
+			for _, auth := range available {
+				if auth.ID == parentAuthID {
+					bind(auth.ID, true)
+					entry.Infof("session-affinity: guardian inherited parent binding | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 					return auth, nil
 				}
 			}
@@ -1129,7 +1288,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
-						bind(auth.ID)
+						bind(auth.ID, true)
 						markBound()
 						if isFork {
 							entry.Infof("session-affinity: fork cache hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
@@ -1140,16 +1299,28 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 					}
 				}
 			}
+			if !isSubagent && !isFork && s.shouldPreserveBindingWhenUnavailable(ctx, availabilityCandidates, model, cachedAuthID, now) {
+				auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+				if err != nil {
+					return nil, err
+				}
+				if auth == nil {
+					return nil, nil
+				}
+				bind(cachedAuthID, false)
+				entry.Infof("session-affinity: fallback cache hit but auth transiently unavailable, failover without rebinding | session=%s fallback=%s bound_auth=%s failover_auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), cachedAuthID, auth.ID, provider, model)
+				return auth, nil
+			}
 		}
 	}
 
-	if parentHomeKey != "" && (!isSubagent || s.subagentAffinity) {
-		if cachedAuthID, ok := s.cache.Get(parentHomeKey); ok {
+	if !s.modelScoped && fallbackID != "" && fallbackID != primaryID && (!isSubagent || s.subagentAffinity) {
+		if parentAuthID := s.cache.latestSessionAuth(fallbackID, providers); parentAuthID != "" {
 			for _, auth := range available {
-				if auth.ID == cachedAuthID {
-					bind(auth.ID)
+				if auth.ID == parentAuthID {
+					bind(auth.ID, true)
 					markBound()
-					entry.Infof("session-affinity: parent home hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
+					entry.Infof("session-affinity: session home inherited | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 					return auth, nil
 				}
 			}
@@ -1163,7 +1334,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if auth == nil {
 		return nil, nil
 	}
-	bind(auth.ID)
+	bind(auth.ID, true)
 	if isFork && fallbackID != "" {
 		entry.Infof("session-affinity: fork bound to new auth | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 	} else {
@@ -1199,11 +1370,13 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
 		availabilityCandidates = positiveWeightAuths(auths)
 	}
-	available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, time.Now())
+	now := time.Now()
+	available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, now)
 	if errAvailable != nil {
 		return nil, true, errAvailable
 	}
 
+	var preservedAuthID string
 	if match, ok := s.matcher.MatchFingerprintsWithContext(namespace, fingerprints, tailFingerprints, envDigest, minPrefixLength); ok {
 		for _, auth := range available {
 			if auth == nil || auth.ID != match.AuthID {
@@ -1245,6 +1418,9 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 			}
 			return auth, true, nil
 		}
+		if !match.IsFork && s.shouldPreserveBindingWhenUnavailable(ctx, availabilityCandidates, model, match.AuthID, now) {
+			preservedAuthID = match.AuthID
+		}
 	}
 
 	fallbackAuths := highestPriorityAuths(available)
@@ -1255,7 +1431,11 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	if auth == nil {
 		return nil, true, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
-	if bindRes := s.matcher.BindFingerprintsWithContext(namespace, fingerprints, tailFingerprints, envDigest, minPrefixLength, auth.ID); bindRes.SessionID != "" {
+	bindAuthID := auth.ID
+	if preservedAuthID != "" {
+		bindAuthID = preservedAuthID
+	}
+	if bindRes := s.matcher.BindFingerprintsWithContext(namespace, fingerprints, tailFingerprints, envDigest, minPrefixLength, bindAuthID); bindRes.SessionID != "" {
 		opts.Metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey] = bindRes.SessionID
 		opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey] = bindRes.SessionID
 		if bindRes.ParentSessionID != "" {
@@ -1266,7 +1446,20 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 		if bindRes.AccessNumber > 0 && opts.Metadata != nil {
 			opts.Metadata[cliproxyexecutor.LCPAccessGenerationMetadataKey] = bindRes.AccessNumber
 		}
-		if bindRes.IsFork {
+		if preservedAuthID != "" {
+			if bindRes.IsCompaction {
+				if opts.Metadata != nil {
+					opts.Metadata[cliproxyexecutor.IsCompactionMetadataKey] = true
+					delete(opts.Metadata, cliproxyexecutor.IsForkMetadataKey)
+					opts.Metadata[cliproxyexecutor.NodeKindMetadataKey] = "compaction"
+				}
+			} else if opts.Metadata != nil {
+				delete(opts.Metadata, cliproxyexecutor.IsForkMetadataKey)
+				delete(opts.Metadata, cliproxyexecutor.IsCompactionMetadataKey)
+				delete(opts.Metadata, cliproxyexecutor.NodeKindMetadataKey)
+			}
+			entry.Infof("session-affinity: LCP cache hit but auth transiently unavailable, failover without rebinding | session=%s bound_auth=%s failover_auth=%s provider=%s model=%s", truncateSessionID(bindRes.SessionID), preservedAuthID, auth.ID, provider, model)
+		} else if bindRes.IsFork {
 			if opts.Metadata != nil {
 				opts.Metadata[cliproxyexecutor.IsForkMetadataKey] = true
 				delete(opts.Metadata, cliproxyexecutor.IsCompactionMetadataKey)
@@ -1542,6 +1735,11 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		// selected credential is unhealthy, so preserve both explicit and LCP bindings.
 		return
 	}
+	if !res.Success && s.rebindOnQuotaOnly && !shouldRebindSessionAffinityOnError(res.Error) {
+		// Under session-affinity-rebind-on: quota, transient failures fail over for
+		// the current request without unbinding the session from its bound credential.
+		return
+	}
 
 	// LCP bindings are independent from explicit harness bindings. A successful
 	// extension is recorded as a new sequence while credential-attributed failures
@@ -1565,7 +1763,14 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 							generation = gen
 						}
 					}
-					s.matcher.RemoveFingerprintsBefore(namespace, fingerprints, res.AuthID, generation)
+					if !s.matcher.RemoveFingerprintsBefore(namespace, fingerprints, res.AuthID, generation) && res.Options.Metadata != nil {
+						isFork, _ := res.Options.Metadata[cliproxyexecutor.IsForkMetadataKey].(bool)
+						if !isFork {
+							if lcpSessionID := sessionMetadataString(res.Options.Metadata, cliproxyexecutor.LCPAffinitySessionIDMetadataKey); lcpSessionID != "" {
+								s.matcher.RemoveSessionBefore(namespace, lcpSessionID, res.AuthID, generation)
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1613,13 +1818,25 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		}
 		return
 	}
-	// Session scope: the failed credential is forgotten for the whole session, home
-	// alias included, so the next pick of any model reselects instead of following
-	// the session home back to it.
+	// Session scope: the failed credential is forgotten for the whole session - every
+	// model's binding that points at it - so the next pick of any model reselects
+	// instead of following the session home back to it. The parent of a subagent is
+	// not touched; only the fallback key it shares with this request is released.
 	s.cache.CompareAndDeleteGroup(cacheKey, res.AuthID)
+	s.cache.CompareAndDeleteSession(primaryID, res.AuthID)
 	if fallbackKey != "" {
 		s.cache.CompareAndDeleteGroup(fallbackKey, res.AuthID)
 	}
+}
+
+// isGuardianRequest deliberately matches the header, not the configurable review model.
+func isGuardianRequest(headers http.Header) bool {
+	for key, values := range headers {
+		if strings.EqualFold(key, "X-Openai-Subagent") && len(values) > 0 {
+			return strings.EqualFold(strings.TrimSpace(values[0]), "guardian")
+		}
+	}
+	return false
 }
 
 // normalizedSessionCandidate validates an explicit client-provided session signal.

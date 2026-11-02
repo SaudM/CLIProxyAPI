@@ -211,7 +211,7 @@ func TestOtherExecutors_DescribeFingerprint(t *testing.T) {
 	assertNoSecretLeak(t, devin, "seed-0123456789")
 
 	meta := NewMetaExecutor(cfg).DescribeFingerprint(auth)
-	if meta["user_agent"] != metaUserAgent {
+	if meta["user_agent"] != metaUserAgent() {
 		t.Fatalf("meta ua = %v", meta["user_agent"])
 	}
 	compat := NewOpenAICompatExecutor("openrouter", cfg).DescribeFingerprint(auth)

@@ -13,9 +13,9 @@ func (e *MetaExecutor) DescribeFingerprint(auth *cliproxyauth.Auth) map[string]a
 		return nil
 	}
 	report := fingerprintBase(e.cfg, auth, fingerprintModeFixed)
-	userAgent := metaUserAgent
+	userAgent := metaUserAgent()
 	if auth.Attributes != nil {
-		if custom := strings.TrimSpace(auth.Attributes["header:User-Agent"]); custom != "" && custom != metaUserAgent {
+		if custom := strings.TrimSpace(auth.Attributes["header:User-Agent"]); custom != "" && custom != metaUserAgent() {
 			userAgent = custom
 			fingerprintOverrides(report)["user_agent"] = custom
 		}

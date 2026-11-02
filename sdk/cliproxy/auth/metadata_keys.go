@@ -24,6 +24,10 @@ func CanonicalCredentialMetadataKey(key string) string {
 		return "proxy_pool_label"
 	case "model-aliases":
 		return "model_aliases"
+	case "openapi-location":
+		return "openapi_location"
+	case "openapi-models":
+		return "openapi_models"
 	case "proxy-url":
 		return "proxy_url"
 	case "request-retry":

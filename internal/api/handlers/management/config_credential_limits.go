@@ -161,7 +161,7 @@ func (h *Handler) PutCredentialLimits(c *gin.Context) {
 		return
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.CredentialLimits = body
-	h.mu.Unlock()
-	h.persist(c)
+	h.persistLocked(c)
 }

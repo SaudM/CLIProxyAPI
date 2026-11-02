@@ -20,6 +20,13 @@ import (
 // newResumptionTestCertificate mints a short-lived self-signed leaf for the
 // loopback TLS server used by the resumption test.
 func newResumptionTestCertificate(t *testing.T) gotls.Certificate {
+	return newResumptionTestCertificateAt(t, time.Now())
+}
+
+// newResumptionTestCertificateAt mints a test leaf valid around now. Tests
+// running inside synctest pass its fake epoch so certificate verification
+// sees the same clock as the handshake timers.
+func newResumptionTestCertificateAt(t *testing.T, now time.Time) gotls.Certificate {
 	t.Helper()
 	key, errKey := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if errKey != nil {
@@ -28,8 +35,8 @@ func newResumptionTestCertificate(t *testing.T) gotls.Certificate {
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "api.anthropic.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
 		DNSNames:     []string{"api.anthropic.com"},
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -46,11 +53,11 @@ func newResumptionTestCertificate(t *testing.T) gotls.Certificate {
 	return gotls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
 }
 
-// TestClaudeCodeTLSNeverResumes proves two consecutive dials through the
-// production config both complete full handshakes: the native Claude Code
-// client never resumes, so a second connection must not present a
-// pre_shared_key even after the server issued session tickets.
-func TestClaudeCodeTLSNeverResumes(t *testing.T) {
+// TestClaudeCodeTLSSessionResumptionCompletesHandshake proves the Claude Code
+// inference ClientHello can actually resume: the spec places pre_shared_key
+// after the padding extension, so a malformed ordering or padding interaction
+// would surface here as a handshake failure rather than a silent regression.
+func TestClaudeCodeTLSSessionResumptionCompletesHandshake(t *testing.T) {
 	certificate := newResumptionTestCertificate(t)
 	roots := x509.NewCertPool()
 	roots.AddCert(certificate.Leaf)
@@ -90,6 +97,7 @@ func TestClaudeCodeTLSNeverResumes(t *testing.T) {
 		}
 	}()
 
+	sessionCache := tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity)
 	dial := func(round int) (resumed bool, helloLength int) {
 		raw, errDial := net.Dial("tcp", listener.Addr().String())
 		if errDial != nil {
@@ -101,7 +109,7 @@ func TestClaudeCodeTLSNeverResumes(t *testing.T) {
 			}
 		}()
 
-		config := newClaudeCodeTLSConfig("api.anthropic.com")
+		config := newClaudeCodeTLSConfig("api.anthropic.com", sessionCache)
 		config.RootCAs = roots
 		conn := tls.UClient(raw, config, tls.HelloCustom)
 		if errPreset := conn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
@@ -123,13 +131,13 @@ func TestClaudeCodeTLSNeverResumes(t *testing.T) {
 		t.Fatal("first handshake reported resumption without a cached session")
 	}
 	secondResumed, secondLength := dial(2)
-	if secondResumed {
-		t.Fatal("second handshake resumed, but the native Claude Code client never resumes sessions")
+	if !secondResumed {
+		t.Fatal("second handshake did not resume, so the session cache is not effective")
 	}
 
-	// Without resumption the second ClientHello carries no pre_shared_key and is
-	// byte-for-byte the same shape as the first.
+	// The padding extension absorbs the pre_shared_key bytes, so a resumed
+	// ClientHello keeps the same BoringSSL padding boundary as a fresh one.
 	if firstLength != secondLength {
-		t.Fatalf("second ClientHello length = %d, want %d to match the fresh handshake", secondLength, firstLength)
+		t.Fatalf("resumed ClientHello length = %d, want %d to match the fresh handshake", secondLength, firstLength)
 	}
 }

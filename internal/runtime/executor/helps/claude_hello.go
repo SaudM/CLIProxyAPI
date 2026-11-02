@@ -39,10 +39,9 @@ func IsClaudeCodeHelloUserAgent(userAgent string) bool {
 }
 
 // ForwardClaudeCodeHello replays Claude Code's startup probe (HEAD /api/hello)
-// upstream through the credential's own transport and egress (its proxy, else
-// globalProxyURL), so an account
-// that serves cloaked requests also shows the unauthenticated probe a native
-// client emits from the same address. It returns the upstream status code.
+// upstream through the credential's egress (its proxy, else globalProxyURL), so
+// an account that serves cloaked requests also shows the unauthenticated probe a
+// native client emits from the same address. It returns the upstream status code.
 func ForwardClaudeCodeHello(ctx context.Context, globalProxyURL string, auth *cliproxyauth.Auth) (int, error) {
 	if auth == nil {
 		return 0, errors.New("claude hello: auth is nil")
@@ -51,7 +50,7 @@ func ForwardClaudeCodeHello(ctx context.Context, globalProxyURL string, auth *cl
 	if proxyURL == "" {
 		proxyURL = strings.TrimSpace(globalProxyURL)
 	}
-	return forwardClaudeCodeHello(ctx, cachedClaudeCodeRoundTripper(proxyURL, auth), claudeCodeHelloUpstreamHost)
+	return forwardClaudeCodeHello(ctx, cachedClaudeCodeRoundTripper(proxyURL), claudeCodeHelloUpstreamHost)
 }
 
 const claudeCodeHelloUpstreamHost = "api.anthropic.com"

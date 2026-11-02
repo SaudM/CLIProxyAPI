@@ -213,30 +213,26 @@ type claudeCodeTLSFingerprintFixture struct {
 	KeyShareGroups      []uint16
 }
 
-// The fixture is the native Claude Code 2.1.274 (Bun 1.4.3 / BoringSSL) fetch
-// ClientHello captured on 2026-09-18: JA3 1523504b38f0fae0d881d4b6554aac1b, with the
-// X25519MLKEM768 hybrid share first and no padding extension because the 1216-byte
-// share lifts the hello past BoringSSL's 256-511 byte padding range.
-func TestClaudeCodeTLSClientHelloSpecMatches274Capture(t *testing.T) {
+func TestClaudeCodeTLSClientHelloSpecMatches220Capture(t *testing.T) {
 	t.Parallel()
 
 	fixture := claudeCodeTLSFingerprintFixture{
-		ClientHelloLength: 1495,
-		JA3:               "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43,4588-29-23-24,0",
-		JA3MD5:            "1523504b38f0fae0d881d4b6554aac1b",
+		ClientHelloLength: 508,
+		JA3:               "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-21,29-23-24,0",
+		JA3MD5:            "d871d02cecbde59abbf8f4806134addf",
 		ALPN:              []string{"http/1.1"},
 		HTTPVersion:       "HTTP/1.1",
 		CipherSuites:      []uint16{4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49161, 49171, 49162, 49172, 156, 157, 47, 53},
-		ExtensionTypes:    []uint16{0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43},
+		ExtensionTypes:    []uint16{0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21},
 		ExtensionLengths: [][2]int{
-			{0, 22}, {23, 0}, {65281, 1}, {10, 10}, {11, 2}, {35, 0}, {16, 11},
-			{5, 5}, {13, 20}, {18, 0}, {51, 1258}, {45, 2}, {43, 5},
+			{0, 22}, {23, 0}, {65281, 1}, {10, 8}, {11, 2}, {35, 0}, {16, 11},
+			{5, 5}, {13, 20}, {18, 0}, {51, 38}, {45, 2}, {43, 5}, {21, 231},
 		},
-		SupportedGroups:     []uint16{4588, 29, 23, 24},
+		SupportedGroups:     []uint16{29, 23, 24},
 		PointFormats:        []uint8{0},
 		SignatureAlgorithms: []uint16{1027, 2052, 1025, 1283, 2053, 1281, 2054, 1537, 513},
 		SupportedVersions:   []uint16{772, 771},
-		KeyShareGroups:      []uint16{4588, 29},
+		KeyShareGroups:      []uint16{29},
 	}
 
 	record := captureClaudeCodeClientHello(t)
@@ -306,13 +302,11 @@ func TestClaudeCodeTLSResumptionIsWireSafe(t *testing.T) {
 		t.Fatalf("extension before pre_shared_key = %T, want *tls.UtlsPaddingExtension", spec.Extensions[len(spec.Extensions)-2])
 	}
 
-	// The native client never resumes, so no session cache is attached and
-	// tickets are disabled. Without OmitEmptyPsk uTLS refuses to marshal an empty
-	// PSK, and without PreferSkipResumptionOnNilExtension a HelloCustom resumption
-	// attempt panics should a cache ever be wired back in.
-	cfg := newClaudeCodeTLSConfig("api.anthropic.com")
-	if cfg.ClientSessionCache != nil || !cfg.SessionTicketsDisabled {
-		t.Fatal("inference TLS config must not resume sessions: the native Claude Code client never does")
+	// Without OmitEmptyPsk uTLS refuses to marshal an empty PSK, and without
+	// PreferSkipResumptionOnNilExtension a HelloCustom resumption attempt panics.
+	cfg := newClaudeCodeTLSConfig("api.anthropic.com", tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity))
+	if cfg.ClientSessionCache == nil {
+		t.Fatal("ClientSessionCache = nil, want a session cache so resumption is possible")
 	}
 	if !cfg.OmitEmptyPsk {
 		t.Fatal("OmitEmptyPsk = false, want true so an unresumed ClientHello stays byte-identical")
@@ -342,39 +336,23 @@ func TestCachedClaudeCodeRoundTripperReusesTransport(t *testing.T) {
 	t.Parallel()
 
 	const proxyURL = "http://127.0.0.1:29653"
-	auth := &cliproxyauth.Auth{ID: "claude-reuse"}
-	first := cachedClaudeCodeRoundTripper(proxyURL, auth)
-	second := cachedClaudeCodeRoundTripper(proxyURL, auth)
+	first := cachedClaudeCodeRoundTripper(proxyURL)
+	second := cachedClaudeCodeRoundTripper(proxyURL)
 	if first != second {
-		t.Fatal("Claude Code transport cache returned different transports for one credential and proxy")
-	}
-}
-
-func TestCachedClaudeCodeRoundTripperIsolatesCredentials(t *testing.T) {
-	t.Parallel()
-
-	const proxyURL = "http://127.0.0.1:29654"
-	first := cachedClaudeCodeRoundTripper(proxyURL, &cliproxyauth.Auth{ID: "claude-a"})
-	second := cachedClaudeCodeRoundTripper(proxyURL, &cliproxyauth.Auth{ID: "claude-b"})
-	if first == second {
-		t.Fatal("two credentials behind one proxy share a transport, so they would share TLS session tickets")
-	}
-	anonymous := cachedClaudeCodeRoundTripper(proxyURL, nil)
-	if anonymous == first || anonymous == second {
-		t.Fatal("credential-less transport must not alias a credential's transport")
+		t.Fatal("Claude Code transport cache returned different transports for one proxy")
 	}
 }
 
 func TestCachedClaudeCodeRoundTripperBoundsProxyCardinality(t *testing.T) {
 	firstProxy := fmt.Sprintf("http://127.0.0.1:%d", 30000)
-	first := cachedClaudeCodeRoundTripper(firstProxy, nil)
+	first := cachedClaudeCodeRoundTripper(firstProxy)
 	for index := 1; index <= claudeCodeRoundTripperCacheCapacity; index++ {
-		cachedClaudeCodeRoundTripper(fmt.Sprintf("http://127.0.0.1:%d", 30000+index), nil)
+		cachedClaudeCodeRoundTripper(fmt.Sprintf("http://127.0.0.1:%d", 30000+index))
 	}
 	if got := claudeCodeRoundTripperCache.Len(); got > claudeCodeRoundTripperCacheCapacity {
 		t.Fatalf("transport cache entries = %d, want at most %d", got, claudeCodeRoundTripperCacheCapacity)
 	}
-	if recreated := cachedClaudeCodeRoundTripper(firstProxy, nil); recreated == first {
+	if recreated := cachedClaudeCodeRoundTripper(firstProxy); recreated == first {
 		t.Fatal("least recently used proxy transport was not evicted")
 	}
 }
@@ -514,8 +492,9 @@ func captureClaudeCodeClientHello(t *testing.T) []byte {
 			t.Errorf("close server pipe: %v", errClose)
 		}
 	})
-	// Use the production config so the captured bytes reflect the real dial path.
-	cfg := newClaudeCodeTLSConfig("api.anthropic.com")
+	// Use the production config so the captured bytes reflect the real dial path,
+	// including the resumption settings.
+	cfg := newClaudeCodeTLSConfig("api.anthropic.com", tls.NewLRUClientSessionCache(claudeCodeSessionCacheCapacity))
 	tlsConn := tls.UClient(clientConn, cfg, tls.HelloCustom)
 	if errPreset := tlsConn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
 		t.Fatal(errPreset)

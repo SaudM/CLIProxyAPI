@@ -394,7 +394,9 @@ func TestConfigV8DeleteLastField(t *testing.T) {
 		{"retry", "request-retry: 3\n", "routing/retry/request-retry", func(cfg *config.Config) bool { return cfg.RequestRetry == config.DefaultRequestRetry }},
 		{"websocket", "ws-auth: false\n", "oauth/providers/aistudio/ws-auth", func(cfg *config.Config) bool { return cfg.WebsocketAuth }},
 		{"debug", "debug: true\n", "observability/logs/debug", func(cfg *config.Config) bool { return !cfg.Debug }},
-		{"sibling", "routing: {strategy: fill-first, retry: {request-retry: 3}}\n", "routing/retry/request-retry", func(cfg *config.Config) bool { return cfg.RequestRetry == config.DefaultRequestRetry && cfg.Routing.Strategy == "fill-first" }},
+		{"sibling", "routing: {strategy: fill-first, retry: {request-retry: 3}}\n", "routing/retry/request-retry", func(cfg *config.Config) bool {
+			return cfg.RequestRetry == config.DefaultRequestRetry && cfg.Routing.Strategy == "fill-first"
+		}},
 		{"provider", "oauth: {providers: {codex: {disable-codex-cloaking: true}}}\n", "upstream/codex/disable-codex-cloaking", func(cfg *config.Config) bool { return !cfg.Codex.DisableCodexCloaking }},
 		{"excluded models", "oauth: {excluded-models: {codex: [blocked-model]}}\n", "oauth/excluded-models", func(cfg *config.Config) bool { return len(cfg.OAuthExcludedModels) == 0 }},
 	} {
@@ -688,6 +690,8 @@ plugins:
 			t.Fatal(errLoad)
 		}
 		loaded.Home = cfg.Home
+		// SourceHash is runtime-only metadata of a file load, not persisted config.
+		loaded.SourceHash = ""
 		select {
 		case snapshot := <-reloads:
 			if !reflect.DeepEqual(snapshot, loaded) || !reflect.DeepEqual(h.cfg, loaded) {

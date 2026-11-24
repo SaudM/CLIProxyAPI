@@ -70,6 +70,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
 		mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
 
+		mgmt.GET("/line-classifier", s.mgmt.GetLineClassifier)
+		mgmt.PUT("/line-classifier", s.mgmt.PutLineClassifier)
+		mgmt.PATCH("/line-classifier", s.mgmt.PutLineClassifier)
+
 		mgmt.POST("/api-call", s.mgmt.APICall)
 
 		mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)

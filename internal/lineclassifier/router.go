@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // Router is the single entry point the request pipeline uses. It holds the
@@ -57,20 +59,37 @@ func (r *Router) Active() bool {
 // that line's prefix. session may be empty (then it is never cached). On any
 // doubt it returns the model pointed at the default line. If the classifier is
 // disabled it returns the model UNCHANGED so existing behaviour is preserved.
-func (r *Router) Route(ctx context.Context, session, model string, body []byte) string {
+func (r *Router) Route(ctx context.Context, session, model string, body []byte) (string, Decision) {
 	if !r.Active() {
-		return model
+		return model, Decision{}
 	}
 	if line, ok := r.getCached(session); ok {
-		return ApplyLinePrefix(model, line, r.cfg.Lines)
+		return ApplyLinePrefix(model, line, r.cfg.Lines), Decision{Line: line}
 	}
 	snippet := ExtractSnippet(body, r.cfg.SnippetChars)
 	line, ok := r.classifier.Classify(ctx, r.getSetting(), snippet)
+	d := Decision{Line: line, Classified: true}
 	if !ok {
 		line = r.cfg.DefaultLine
+		d.Line = line
+		d.Defaulted = true
 	}
 	r.putCached(session, line)
-	return ApplyLinePrefix(model, line, r.cfg.Lines)
+	log.WithFields(log.Fields{
+		"session":   session,
+		"line":      d.Line,
+		"defaulted": d.Defaulted,
+		"model":     model,
+	}).Info("line classifier: new session classified")
+	return ApplyLinePrefix(model, line, r.cfg.Lines), d
+}
+
+// Decision explains what the router did, so callers can log new classifications
+// (and why a default was used) without re-deriving it.
+type Decision struct {
+	Line       string // the business line chosen
+	Classified bool   // a fresh classification happened (not a cached binding)
+	Defaulted  bool   // the classifier was undecided/unavailable; default line used
 }
 
 func (r *Router) getCached(session string) (string, bool) {

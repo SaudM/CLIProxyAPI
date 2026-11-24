@@ -24,7 +24,7 @@ func newTestRouter(url, model string) (*Router, *int) {
 
 func TestRoute_DisabledPassesThrough(t *testing.T) {
 	r, _ := newTestRouter("", "") // not configured
-	if got := r.Route(context.Background(), "s1", "claude-x", nil); got != "claude-x" {
+	if got, _ := r.Route(context.Background(), "s1", "claude-x", nil); got != "claude-x" {
 		t.Fatalf("disabled router must not touch model, got %q", got)
 	}
 	if r.Active() {
@@ -45,12 +45,14 @@ func TestRoute_ClassifiesAndSticks(t *testing.T) {
 	r, _ := newTestRouter(srv.URL, "cheap")
 	body := []byte(`{"model":"claude-x","messages":[{"role":"user","content":"draft a launch tweet"}]}`)
 
-	got := r.Route(context.Background(), "sessA", "claude-x", body)
-	if got != "write/claude-x" {
+	got, d := r.Route(context.Background(), "sessA", "claude-x", body)
+	if got != "write/claude-x" || d.Line != "write" || !d.Classified {
 		t.Fatalf("want write/claude-x, got %q", got)
 	}
 	// Same session reuses the decision: classifier called exactly once.
-	_ = r.Route(context.Background(), "sessA", "claude-x", body)
+	if _, d2 := r.Route(context.Background(), "sessA", "claude-x", body); d2.Classified {
+		t.Fatal("cached session must not reclassify")
+	}
 	if calls != 1 {
 		t.Fatalf("stickiness broken: classifier called %d times", calls)
 	}
@@ -59,8 +61,8 @@ func TestRoute_ClassifiesAndSticks(t *testing.T) {
 func TestRoute_DefaultWhenClassifierDown(t *testing.T) {
 	r, _ := newTestRouter("http://127.0.0.1:1", "cheap") // nothing listening
 	body := []byte(`{"model":"claude-x","messages":[{"role":"user","content":"deploy it"}]}`)
-	got := r.Route(context.Background(), "sessB", "claude-x", body)
-	if got != "misc/claude-x" {
+	got, d := r.Route(context.Background(), "sessB", "claude-x", body)
+	if got != "misc/claude-x" || !d.Defaulted {
 		t.Fatalf("down classifier must fall to default line, got %q", got)
 	}
 }
@@ -74,7 +76,7 @@ func TestRoute_UnknownLabelFallsToDefault(t *testing.T) {
 	defer srv.Close()
 	r, _ := newTestRouter(srv.URL, "cheap")
 	body := []byte(`{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}`)
-	if got := r.Route(context.Background(), "sessC", "claude-x", body); got != "misc/claude-x" {
+	if got, d := r.Route(context.Background(), "sessC", "claude-x", body); got != "misc/claude-x" || !d.Defaulted {
 		t.Fatalf("invented label must be rejected -> default, got %q", got)
 	}
 }

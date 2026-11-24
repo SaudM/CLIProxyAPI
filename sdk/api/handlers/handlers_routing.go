@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
@@ -380,13 +381,15 @@ func (h *BaseAPIHandler) classifyLine(ctx context.Context, handlerType, modelNam
 	if info, ok := coresession.ExtractSessionInfo(modelExecutionHeaders(ctx, nil), rawJSON, nil); ok {
 		session = info.SessionID
 	}
-	routed := router.Route(ctx, session, modelName, rawJSON)
+	routed, decision := router.Route(ctx, session, modelName, rawJSON)
 	if routed == modelName || len(util.GetProviderName(routed)) > 0 {
 		return routed
 	}
 	// No account serves the prefixed model; only fall back when the original
 	// model is actually routable, so a genuinely unknown model keeps its error.
 	if len(util.GetProviderName(modelName)) > 0 {
+		log.WithFields(log.Fields{"session": session, "line": decision.Line, "routed": routed, "model": modelName}).
+			Warn("line classifier: no account serves the prefixed model, falling back to the unprefixed model")
 		return modelName
 	}
 	return routed

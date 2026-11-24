@@ -388,8 +388,8 @@ func (h *BaseAPIHandler) classifyLine(ctx context.Context, handlerType, modelNam
 	// No account serves the prefixed model; only fall back when the original
 	// model is actually routable, so a genuinely unknown model keeps its error.
 	if len(util.GetProviderName(modelName)) > 0 {
-		log.WithFields(log.Fields{"session": session, "line": decision.Line, "routed": routed, "model": modelName}).
-			Warn("line classifier: no account serves the prefixed model, falling back to the unprefixed model")
+		log.Warnf("line classifier: no account serves %q (line=%s session=%s), falling back to %q",
+			routed, decision.Line, session, modelName)
 		return modelName
 	}
 	return routed

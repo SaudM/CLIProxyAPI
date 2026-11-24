@@ -75,12 +75,10 @@ func (r *Router) Route(ctx context.Context, session, model string, body []byte) 
 		d.Defaulted = true
 	}
 	r.putCached(session, line)
-	log.WithFields(log.Fields{
-		"session":   session,
-		"line":      d.Line,
-		"defaulted": d.Defaulted,
-		"model":     model,
-	}).Info("line classifier: new session classified")
+	// Values live in the message, not logrus fields: the shared formatter only
+	// prints an allow-listed set of field keys, so custom keys would be dropped.
+	log.Infof("line classifier: new session classified line=%s defaulted=%t model=%s session=%s",
+		d.Line, d.Defaulted, model, shortSession(session))
 	return ApplyLinePrefix(model, line, r.cfg.Lines), d
 }
 
@@ -90,6 +88,18 @@ type Decision struct {
 	Line       string // the business line chosen
 	Classified bool   // a fresh classification happened (not a cached binding)
 	Defaulted  bool   // the classifier was undecided/unavailable; default line used
+}
+
+// shortSession keeps logs readable while still distinguishing sessions.
+func shortSession(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	if len(s) > 24 {
+		return s[:24] + "…"
+	}
+	return s
 }
 
 func (r *Router) getCached(session string) (string, bool) {

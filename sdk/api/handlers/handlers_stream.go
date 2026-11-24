@@ -283,6 +283,11 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 
 func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context, entryProtocol, exitProtocol, modelName string, rawJSON []byte, alt string, allowImageModel bool, execOptions modelExecutionOptions) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
 	originalRequestedModel := modelName
+	// Optional pre-routing: classify a new session into a business line and
+	// rewrite the model name to that line's prefix. No-op unless configured.
+	// Cached by session, so a stream reuses the line its conversation was bound
+	// to and matches the non-stream path.
+	modelName = h.classifyLine(ctx, entryProtocol, modelName, rawJSON)
 	// Speech-only models are reachable solely through the speech entry protocol.
 	execOptions.AllowSpeechModel = isModelExecutionSpeechProtocol(entryProtocol)
 	routeDecision, preparedRoute := preparedModelRouteFromContext(ctx, execOptions.SkipRouterPluginID)

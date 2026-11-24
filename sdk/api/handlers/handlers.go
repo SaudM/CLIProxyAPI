@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/lineclassifier"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -447,6 +448,31 @@ type BaseAPIHandler struct {
 	// ModelRouterHost optionally routes matching requests to a plugin executor, the router's own
 	// executor, or a built-in provider before model-to-provider resolution and auth selection.
 	ModelRouterHost PluginModelRouterHost
+
+	// lineRouter optionally classifies a new session into a business line and
+	// rewrites the model name to that line's prefix before provider resolution.
+	// nil => feature off (requests untouched). Guarded by runtimeMu.
+	lineRouter *lineclassifier.Router
+}
+
+// SetLineRouter installs (or clears) the pre-routing line classifier. Safe to
+// call at startup and on config reload. A nil router disables the feature.
+func (h *BaseAPIHandler) SetLineRouter(r *lineclassifier.Router) {
+	if h == nil {
+		return
+	}
+	h.runtimeMu.Lock()
+	h.lineRouter = r
+	h.runtimeMu.Unlock()
+}
+
+func (h *BaseAPIHandler) lineRouterRef() *lineclassifier.Router {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	defer h.runtimeMu.RUnlock()
+	return h.lineRouter
 }
 
 // NewBaseAPIHandlers creates a new API handlers instance.

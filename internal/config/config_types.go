@@ -523,6 +523,37 @@ type RoutingConfig struct {
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// LineClassifier optionally classifies each NEW session into one business
+	// line (from a fixed table) before credential selection, rewriting the model
+	// name to "line/model" so force-model-prefix routing picks that line's
+	// accounts. Empty url or model => disabled (requests are untouched).
+	LineClassifier LineClassifierConfig `yaml:"line-classifier,omitempty" json:"line-classifier,omitempty"`
+}
+
+// LineClassifierConfig configures the optional pre-routing line classifier.
+// The lines table and default are operator-fixed; url/key/model are editable at
+// runtime through the management API.
+type LineClassifierConfig struct {
+	// URL is the OpenAI-compatible base (the parent of /chat/completions).
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	// Key is the bearer key for the classifier endpoint ("" for local no-auth).
+	// json:"-" keeps it out of GET /config responses (like github-token); it is
+	// still persisted to YAML and only ever shown masked via GetLineClassifier.
+	Key string `yaml:"key,omitempty" json:"-"`
+	// Model is the cheap model id used only for classification.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// Lines is the FIXED table of business lines, e.g. ["build","write","misc"].
+	// Each must have accounts carrying the matching prefix. Empty => disabled.
+	Lines []string `yaml:"lines,omitempty" json:"lines,omitempty"`
+	// DefaultLine is used on any classification doubt; must be one of Lines.
+	DefaultLine string `yaml:"default-line,omitempty" json:"default-line,omitempty"`
+	// SnippetChars bounds how many chars of system/first-user are sent (default 200).
+	SnippetChars int `yaml:"snippet-chars,omitempty" json:"snippet-chars,omitempty"`
+	// TimeoutMs is the per-classify-call timeout in ms (default 4000).
+	TimeoutMs int `yaml:"timeout-ms,omitempty" json:"timeout-ms,omitempty"`
+	// TTLMinutes is how long a session->line binding is kept (default 240).
+	TTLMinutes int `yaml:"ttl-minutes,omitempty" json:"ttl-minutes,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

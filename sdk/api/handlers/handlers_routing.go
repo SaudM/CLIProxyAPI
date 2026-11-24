@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
@@ -13,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	coresession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"golang.org/x/net/context"
 )
@@ -357,6 +359,40 @@ func modelRoutersEnabled(host PluginModelRouterHost, skipPluginID string) bool {
 	// No detector: treat routing as disabled (same conservative default as before any
 	// ModelRouter existed). Hosts that route must implement HasModelRouters (pluginhost.Host does).
 	return false
+}
+
+// classifyLine runs the optional pre-routing line classifier and returns the
+// model name rewritten to the chosen line's prefix (e.g. "build/claude-x"). If
+// the classifier is disabled or unset it returns modelName unchanged, so this
+// is a no-op unless the operator configures line-classifier. It runs before
+// applyModelRouter / provider resolution so the prefix drives credential
+// selection through the existing force-model-prefix path.
+//
+// Back-compat guard: if the rewritten "<line>/<model>" has NO account able to
+// serve it, it falls back to the original model name. This keeps a partially
+// migrated deployment working — e.g. a main account that is not yet prefixed
+// keeps serving instead of every request failing with "unknown provider".
+func (h *BaseAPIHandler) classifyLine(ctx context.Context, handlerType, modelName string, rawJSON []byte) string {
+	router := h.lineRouterRef()
+	if router == nil || !router.Active() {
+		return modelName
+	}
+	var session string
+	if info, ok := coresession.ExtractSessionInfo(modelExecutionHeaders(ctx, nil), rawJSON, nil); ok {
+		session = info.SessionID
+	}
+	routed, decision := router.Route(ctx, session, modelName, rawJSON)
+	if routed == modelName || len(util.GetProviderName(routed)) > 0 {
+		return routed
+	}
+	// No account serves the prefixed model; only fall back when the original
+	// model is actually routable, so a genuinely unknown model keeps its error.
+	if len(util.GetProviderName(modelName)) > 0 {
+		log.Warnf("line classifier: no account serves %q (line=%s session=%s), falling back to %q",
+			routed, decision.Line, session, modelName)
+		return modelName
+	}
+	return routed
 }
 
 func (h *BaseAPIHandler) applyModelRouter(ctx context.Context, handlerType, modelName string, rawJSON []byte, stream bool, execOptions modelExecutionOptions) modelRouteDecision {
